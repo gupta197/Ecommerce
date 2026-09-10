@@ -1,0 +1,16 @@
+{
+  "name": "@ecommerce/config",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    "./typescript/base.json": "./typescript/base.json",
+    "./eslint/base.mjs": "./eslint/base.mjs",
+    "./prettier/index.json": "./prettier/index.json"
+  },
+  "dependencies": {
+    "@eslint/js": "10.0.1",
+    "typescript-eslint": "8.70.0",
+    "eslint-config-prettier": "10.1.8"
+  }
+}

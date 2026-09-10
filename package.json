@@ -1,0 +1,27 @@
+{
+  "name": "ecommerce-platform",
+  "private": true,
+  "version": "0.0.0",
+  "engines": {
+    "node": ">=24.21.0 <25",
+    "npm": ">=11.0.0 <12"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "build": "npm run build --workspaces --if-present"
+  },
+  "prettier": "@ecommerce/config/prettier/index.json",
+  "devDependencies": {
+    "typescript": "6.0.3",
+    "eslint": "10.10.0",
+    "prettier": "3.9.6",
+    "@types/node": "24.13.4"
+  }
+}
