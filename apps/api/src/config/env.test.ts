@@ -2,14 +2,18 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { loadConfig, ConfigError } from './env.js'
 
+const JWT_ACCESS_TOKEN_SECRET = 'x'.repeat(32)
+
 const baseMongo = {
   MONGODB_URI: 'mongodb://localhost:27017',
   MONGODB_DB_NAME: 'db_001_test',
+  JWT_ACCESS_TOKEN_SECRET,
 }
 
 const validProdMongo = {
   MONGODB_URI: 'mongodb+srv://cluster0.example.mongodb.net',
   MONGODB_DB_NAME: 'ecommerce_prod',
+  JWT_ACCESS_TOKEN_SECRET,
 }
 
 test('valid development env parses with sensible defaults', () => {
@@ -94,6 +98,7 @@ test('production with an explicit tls=true MONGODB_URI succeeds', () => {
     CORS_ORIGIN: 'https://shop.example.com',
     MONGODB_URI: 'mongodb://db.internal.example.com:27017/?tls=true',
     MONGODB_DB_NAME: 'ecommerce_prod',
+    JWT_ACCESS_TOKEN_SECRET,
   } as NodeJS.ProcessEnv)
   assert.equal(config.mongo.uri, 'mongodb://db.internal.example.com:27017/?tls=true')
 })

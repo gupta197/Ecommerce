@@ -1,5 +1,10 @@
 export type ErrorCode =
-  'VALIDATION_ERROR' | 'NOT_FOUND' | 'RATE_LIMITED' | 'NOT_READY' | 'INTERNAL_ERROR'
+  | 'VALIDATION_ERROR'
+  | 'NOT_FOUND'
+  | 'RATE_LIMITED'
+  | 'NOT_READY'
+  | 'UNAUTHENTICATED'
+  | 'INTERNAL_ERROR'
 
 export class AppError extends Error {
   readonly statusCode: number
@@ -26,5 +31,12 @@ export class ValidationError extends AppError {
   constructor(message = 'Validation failed', details?: unknown[]) {
     super(422, 'VALIDATION_ERROR', message, details)
     this.name = 'ValidationError'
+  }
+}
+
+export class UnauthenticatedError extends AppError {
+  constructor(message = 'Authentication required.') {
+    super(401, 'UNAUTHENTICATED', message)
+    this.name = 'UnauthenticatedError'
   }
 }

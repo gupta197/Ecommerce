@@ -20,7 +20,7 @@ export function createApp(config: AppConfig, logger: Logger): Express {
   app.use(createRequestLogger(logger))
   app.use(createRateLimiter(config.rateLimit))
 
-  app.use('/api/v1', createV1Router())
+  app.use('/api/v1', createV1Router(config, logger))
 
   app.use(notFoundHandler)
   app.use(createErrorHandler(logger))

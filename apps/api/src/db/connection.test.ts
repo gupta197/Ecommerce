@@ -13,6 +13,7 @@ function testConfig(overrides: Record<string, string>) {
     CORS_ORIGIN: 'http://localhost:5173',
     LOG_LEVEL: 'silent',
     MONGODB_DB_NAME: 'db_001_test',
+    JWT_ACCESS_TOKEN_SECRET: 'x'.repeat(32),
     ...overrides,
   } as NodeJS.ProcessEnv)
 }

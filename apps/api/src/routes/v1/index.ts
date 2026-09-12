@@ -1,10 +1,23 @@
 import { Router } from 'express'
 import { healthRouter } from './health.route.js'
 import { readyRouter } from './ready.route.js'
+import { createAuthRouter } from '../../modules/auth/routes/auth.route.js'
+import type { AppConfig } from '../../config/env.js'
+import type { Logger } from '../../lib/logger.js'
 
-export function createV1Router(): Router {
+export function createV1Router(config: AppConfig, logger: Logger): Router {
   const router = Router()
   router.use(healthRouter)
   router.use(readyRouter)
+  router.use(
+    '/auth',
+    createAuthRouter({
+      authConfig: config.auth,
+      authRateLimit: config.authRateLimit,
+      allowedOrigins: config.corsOrigins,
+      isProduction: config.nodeEnv === 'production',
+      logger,
+    }),
+  )
   return router
 }

@@ -26,6 +26,15 @@ const envSchema = z
     MONGODB_QUERY_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
     MONGODB_INITIAL_CONNECT_RETRIES: z.coerce.number().int().nonnegative().default(5),
     MONGODB_INITIAL_CONNECT_RETRY_DELAY_MS: z.coerce.number().int().positive().default(2_000),
+    JWT_ACCESS_TOKEN_SECRET: z.string().min(32),
+    ACCESS_TOKEN_TTL_MS: z.coerce.number().int().positive().default(900_000),
+    REFRESH_TOKEN_TTL_MS: z.coerce.number().int().positive().default(2_592_000_000),
+    ABSOLUTE_SESSION_LIFETIME_MS: z.coerce.number().int().positive().default(7_776_000_000),
+    LOGIN_GRACE_ATTEMPTS: z.coerce.number().int().nonnegative().default(3),
+    LOGIN_BASE_DELAY_MS: z.coerce.number().int().positive().default(1_000),
+    LOGIN_MAX_DELAY_MS: z.coerce.number().int().positive().default(900_000),
+    AUTH_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
+    AUTH_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
   })
   .superRefine((env, ctx) => {
     if (env.NODE_ENV !== 'production') return
@@ -129,6 +138,16 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env) {
         retryDelayMs: env.MONGODB_INITIAL_CONNECT_RETRY_DELAY_MS,
       },
     },
+    auth: {
+      jwtSecret: env.JWT_ACCESS_TOKEN_SECRET,
+      accessTokenTtlMs: env.ACCESS_TOKEN_TTL_MS,
+      refreshTokenTtlMs: env.REFRESH_TOKEN_TTL_MS,
+      absoluteSessionLifetimeMs: env.ABSOLUTE_SESSION_LIFETIME_MS,
+      loginGraceAttempts: env.LOGIN_GRACE_ATTEMPTS,
+      loginBaseDelayMs: env.LOGIN_BASE_DELAY_MS,
+      loginMaxDelayMs: env.LOGIN_MAX_DELAY_MS,
+    },
+    authRateLimit: { windowMs: env.AUTH_RATE_LIMIT_WINDOW_MS, max: env.AUTH_RATE_LIMIT_MAX },
   }
 }
 

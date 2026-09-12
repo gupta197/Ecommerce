@@ -12,6 +12,7 @@ function buildTestApp() {
     LOG_LEVEL: 'silent',
     MONGODB_URI: 'mongodb://localhost:27017',
     MONGODB_DB_NAME: 'db_001_test',
+    JWT_ACCESS_TOKEN_SECRET: 'x'.repeat(32),
   } as NodeJS.ProcessEnv)
   const logger = createLogger(config)
   return createApp(config, logger)
