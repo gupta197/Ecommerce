@@ -74,3 +74,18 @@ Refresh-token rotation is implemented as a single atomic MongoDB `findOneAndUpda
 **Status:** Accepted
 
 Login failure handling uses a progressive, doubling delay (`nextAttemptAllowedAt`) after an initial grace period, capped at a maximum, always reset to zero by a correct password — never a fixed "N failures → locked for M minutes" hard lockout. A hard, account-wide lockout keyed only on a known/guessable email is itself a targeted denial-of-service vector: it lets an attacker who does not have the victim's password lock the victim out on demand. This lives alongside, not instead of, the existing IP-based rate limiter, and requires no Redis.
+
+## ADR-016 — Fixed Role Enum and Static Permission Map, No Role/Permission Collections
+**Status:** Accepted
+
+`OrganizationMembership.role` is a fixed `OWNER | ADMIN | MEMBER` enum, and permissions are a static, code-defined role→permission map (`organization.read`, `organization.update`, `membership.read`, `membership.manage`, `role.manage`) — no separate `Role` or `Permission` MongoDB collection. SEC-002's actual requirements (tenant isolation, authorization tests passing) don't call for dynamic or per-organization-custom roles; a fixed enum plus a static map is the simplest model that satisfies them, and remains an additive, non-breaking migration path if genuine custom roles are ever required later.
+
+## ADR-017 — Organization Context via URL Parameter, Re-Verified Every Request
+**Status:** Accepted
+
+Organization context is carried in the URL (`/api/v1/organizations/:organizationId/...`), never in the JWT or session, and is re-resolved from the database on every request (organization existence, `ACTIVE` status, then the caller's `ACTIVE` membership) rather than cached anywhere. All three failure reasons (organization missing, suspended, or caller not a member) produce a byte-identical generic 403, so none can be enumerated. This costs one extra indexed read per organization-scoped request compared to `authenticate()`'s stateless JWT verification — an accepted, necessary tradeoff, since authorization must reflect a revoked membership immediately, unlike pure authentication's bounded staleness.
+
+## ADR-018 — Last-Owner Protection via an Atomically-Guarded Owner Counter
+**Status:** Accepted
+
+`Organization.activeOwnerCount` is a denormalized counter, mutated only through a guarded `findOneAndUpdate` (`{activeOwnerCount: {$gt: 1}}` → `$inc: -1`) rather than a "count documents, then decide, then write" sequence — even inside a multi-document transaction, the latter does not prevent a write-skew race where two concurrent operations each target a *different* one of two owners and each independently observes "2 owners, safe to proceed." Routing every owner-count change through one shared counter field forces MongoDB's single-document write serialization to arbitrate the race, proven by a dedicated concurrency test covering exactly that two-different-owners scenario.
