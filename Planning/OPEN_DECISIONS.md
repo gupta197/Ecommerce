@@ -17,3 +17,4 @@ This file is the source of truth for architecture/business decisions that are no
 | DEC-003 | Email provider | Resend / SES / other | Choose based on deliverability and cost | OPEN |
 | DEC-004 | SMS/WhatsApp provider | Provider TBD | Select after notification requirements are finalized | OPEN |
 | DEC-005 | Production hosting | AWS / Azure / other | Decide after deployment requirements | OPEN |
+| DEC-006 | Migration tool for schema evolution | migrate-mongo / custom script + tracking collection / defer until first real schema | Defer the tool choice until the first schema-changing task (likely CAT-001) actually needs it | OPEN |
