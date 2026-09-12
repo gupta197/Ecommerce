@@ -6,6 +6,7 @@ import {
   type CategoryStatus,
 } from '../models/category.model.js'
 import { ValidationError } from '../../../lib/http-errors.js'
+import { isDuplicateKeyError } from '../lib/mongo-errors.js'
 
 export interface CreateCategoryData {
   organizationId: Types.ObjectId
@@ -41,17 +42,7 @@ export interface ListCategoriesResult {
   total: number
 }
 
-const DUPLICATE_KEY_ERROR_CODE = 11000
 const DUPLICATE_SLUG_MESSAGE = 'A category with this slug already exists in this organization.'
-
-function isDuplicateKeyError(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    (error as { code?: unknown }).code === DUPLICATE_KEY_ERROR_CODE
-  )
-}
 
 function duplicateSlugError(): ValidationError {
   return new ValidationError(DUPLICATE_SLUG_MESSAGE, [

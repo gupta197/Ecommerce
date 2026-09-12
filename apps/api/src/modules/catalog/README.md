@@ -1,9 +1,9 @@
-# Catalog Module — Category (CAT-001)
+# Catalog Module — Category (CAT-001) & Brand (CAT-002)
 
-This module currently implements **only Category** (CAT-001 in
-`Planning/MASTER_TASK_LIST.xlsx`). Brand (CAT-002), Product (CAT-003), and
-ProductVariant (CAT-004) are separate, later tasks — this file documents
-Category only and will be extended by those tasks, not rewritten by them.
+This module currently implements **Category and Brand** (CAT-001 and CAT-002
+in `Planning/MASTER_TASK_LIST.xlsx`). Product (CAT-003) and ProductVariant
+(CAT-004) are separate, later tasks — this file documents Category and Brand
+only and will be extended by those tasks, not rewritten by them.
 
 ## Layering
 
@@ -121,7 +121,55 @@ field today (unlike, say, a future Product's cost price) — the transform
 convention is established here so later modules follow the same pattern
 consistently.
 
+## Brand
+
+Brand (CAT-002) follows the same `Service → Repository → Model` layering
+and the same "no routes yet, deferred until SEC-002" reasoning above — not
+repeated per-module here.
+
+**Organization ownership**: same as Category (see above) — org-owned per
+ADR-009, which already named Brand explicitly when it was written.
+
+**No hierarchy**: unlike Category, Brand has no `parentId`/`sortOrder` —
+there is nothing to nest or order. `brand.service.ts` is correspondingly
+simpler than `category.service.ts`: no parent validation, no cycle
+detection, no `assertValidParent`-equivalent.
+
+**Slug behavior**: identical rules to Category — generation via the same
+`lib/slugify.ts`, `{organizationId, slug}` uniqueness, collision suffixing,
+explicit-duplicate rejection, rename-independence — reusing the same
+utility and the same `common.schema.ts` helpers, not a second
+implementation.
+
+**Shared duplicate-key detection**: `lib/mongo-errors.ts` exports
+`isDuplicateKeyError()`, extracted from what was originally an inline
+check in `category.repository.ts`. Both `category.repository.ts` and
+`brand.repository.ts` now import it; the extraction changed nothing about
+Category's behavior or error messages — each repository still builds its
+own entity-specific `ValidationError` message locally.
+
+**Lifecycle**: same `DRAFT | ACTIVE | ARCHIVED` convention (ADR-011).
+Simpler than Category here too — there's no cascade question, since Brand
+has no children.
+
+**Logo**: an optional `{ url: string, altText?: string }` reference only —
+no upload/storage infrastructure, no signed URLs, no binary data in
+MongoDB. A future media/upload task populates `logo.url`; this schema
+doesn't need to know how.
+
+**Index**: `{organizationId, slug}` unique only. An `{organizationId,
+status}` index was considered and deliberately not added — no current
+query pattern needs it, and it's a zero-migration-risk addition later if
+one emerges.
+
+**Future Product relationship (not implemented here)**: `Brand._id` is the
+intended future `Product.brandId` reference. Whether CAT-003 allows a
+Product to reference an archived Brand is CAT-003's decision — Brand has
+no self-referential parent concept, so there's no equivalent check to add
+on this side.
+
 ## Testing
 
 `mongodb-memory-server`'s `MongoMemoryServer` (standalone) — no transactions
-are needed for category CRUD, so a replica set isn't required here.
+are needed for category or brand CRUD, so a replica set isn't required
+here.
