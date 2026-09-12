@@ -4,6 +4,7 @@ export type ErrorCode =
   | 'RATE_LIMITED'
   | 'NOT_READY'
   | 'UNAUTHENTICATED'
+  | 'FORBIDDEN'
   | 'INTERNAL_ERROR'
 
 export class AppError extends Error {
@@ -38,5 +39,12 @@ export class UnauthenticatedError extends AppError {
   constructor(message = 'Authentication required.') {
     super(401, 'UNAUTHENTICATED', message)
     this.name = 'UnauthenticatedError'
+  }
+}
+
+export class ForbiddenError extends AppError {
+  constructor(message = 'You do not have access to this resource.') {
+    super(403, 'FORBIDDEN', message)
+    this.name = 'ForbiddenError'
   }
 }
