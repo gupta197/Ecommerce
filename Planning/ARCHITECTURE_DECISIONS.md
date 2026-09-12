@@ -59,3 +59,18 @@ Catalog entities (starting with Category) use a `DRAFT | ACTIVE | ARCHIVED` stat
 **Status:** Accepted
 
 Catalog modules (starting with CAT-001/Category) stop at Service → Repository → Model until SEC-001 (authentication) and SEC-002 (organizations/RBAC) exist. No HTTP routes or controllers are added before then, and no temporary/placeholder authentication or authorization system is introduced to work around the gap. Every repository function requires `organizationId` as a mandatory parameter, so the eventual route layer is a thin wrapper over an already tenant-safe service layer.
+
+## ADR-013 — Hybrid JWT + DB-Backed Refresh Session Architecture
+**Status:** Accepted
+
+Authentication uses a short-lived, stateless, signed JWT access token (`jose`, HS256, ~15 minutes) for per-request verification, plus a long-lived, opaque, DB-backed refresh token (`SecuritySession`, SHA-256 hash at rest) for session management. A pure stateless-JWT design cannot support CLAUDE.md's session requirements (list active sessions, revoke one/others, family reuse detection) without a server-side record; a pure DB-session-per-request design would require a MongoDB round trip on every authenticated request. The JWT carries only `sub`/`sid`/`jti`/`iat`/`exp`/`iss`/`aud` — never roles, permissions, or `organizationId` — keeping it compatible with, but not anticipating, SEC-002's authorization layer.
+
+## ADR-014 — Atomic Refresh-Token Rotation with Family-Wide Reuse Revocation
+**Status:** Accepted
+
+Refresh-token rotation is implemented as a single atomic MongoDB `findOneAndUpdate` compare-and-swap (`{refreshTokenHash, status: 'ACTIVE'}` → `{status: 'ROTATED', ...}`), not a separate find-then-update sequence, so two concurrent refresh attempts with the same token can never both succeed. Sessions are grouped by a `familyId` only (no `parentSessionId` — every session in a family already carries the same `familyId`, so a back-reference would be redundant). If a claim fails because the token is found but not `ACTIVE`, the entire family is revoked (reuse detection) and a generic, non-distinguishing error is returned regardless of the underlying cause. `familyCreatedAt` is denormalized onto every generation (not just the first) so an absolute session lifetime (default 90 days) can be enforced even after earlier generations are TTL-deleted, independent of the 30-day sliding refresh window.
+
+## ADR-015 — Progressive Login Delay Instead of Hard Account Lockout
+**Status:** Accepted
+
+Login failure handling uses a progressive, doubling delay (`nextAttemptAllowedAt`) after an initial grace period, capped at a maximum, always reset to zero by a correct password — never a fixed "N failures → locked for M minutes" hard lockout. A hard, account-wide lockout keyed only on a known/guessable email is itself a targeted denial-of-service vector: it lets an attacker who does not have the victim's password lock the victim out on demand. This lives alongside, not instead of, the existing IP-based rate limiter, and requires no Redis.
