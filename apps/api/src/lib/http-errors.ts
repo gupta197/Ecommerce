@@ -1,4 +1,5 @@
-export type ErrorCode = 'VALIDATION_ERROR' | 'NOT_FOUND' | 'RATE_LIMITED' | 'INTERNAL_ERROR'
+export type ErrorCode =
+  'VALIDATION_ERROR' | 'NOT_FOUND' | 'RATE_LIMITED' | 'NOT_READY' | 'INTERNAL_ERROR'
 
 export class AppError extends Error {
   readonly statusCode: number

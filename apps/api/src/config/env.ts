@@ -13,9 +13,23 @@ const envSchema = z
     RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
     RATE_LIMIT_MAX: z.coerce.number().int().positive().default(100),
     SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
+    MONGODB_URI: z
+      .string()
+      .refine((v) => v.startsWith('mongodb://') || v.startsWith('mongodb+srv://'), {
+        message: 'MONGODB_URI must start with mongodb:// or mongodb+srv://',
+      }),
+    MONGODB_DB_NAME: z.string().min(1),
+    MONGODB_MAX_POOL_SIZE: z.coerce.number().int().positive().default(10),
+    MONGODB_MIN_POOL_SIZE: z.coerce.number().int().nonnegative().default(0),
+    MONGODB_SERVER_SELECTION_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
+    MONGODB_SOCKET_TIMEOUT_MS: z.coerce.number().int().positive().default(45_000),
+    MONGODB_QUERY_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
+    MONGODB_INITIAL_CONNECT_RETRIES: z.coerce.number().int().nonnegative().default(5),
+    MONGODB_INITIAL_CONNECT_RETRY_DELAY_MS: z.coerce.number().int().positive().default(2_000),
   })
   .superRefine((env, ctx) => {
     if (env.NODE_ENV !== 'production') return
+
     const origin = env.CORS_ORIGIN?.trim()
     if (!origin) {
       ctx.addIssue({
@@ -23,16 +37,48 @@ const envSchema = z
         path: ['CORS_ORIGIN'],
         message: 'CORS_ORIGIN is required in production.',
       })
-      return
-    }
-    if (origin.split(',').some((o) => o.trim() === '*')) {
+    } else if (origin.split(',').some((o) => o.trim() === '*')) {
       ctx.addIssue({
         code: 'custom',
         path: ['CORS_ORIGIN'],
         message: 'CORS_ORIGIN must not be "*" in production.',
       })
     }
+
+    const authority = getMongoAuthority(env.MONGODB_URI)
+    if (authority.includes('localhost') || authority.includes('127.0.0.1')) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['MONGODB_URI'],
+        message:
+          'MONGODB_URI must not point at localhost/127.0.0.1 in production — this guards ' +
+          'against accidentally running production against a development database.',
+      })
+    }
+
+    const isSrv = env.MONGODB_URI.startsWith('mongodb+srv://')
+    const hasExplicitTls = /[?&](tls|ssl)=true/i.test(env.MONGODB_URI)
+    if (!isSrv && !hasExplicitTls) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['MONGODB_URI'],
+        message:
+          'MONGODB_URI must use mongodb+srv:// or include tls=true/ssl=true in production. ' +
+          'This is a startup safety guard, not a substitute for correct infrastructure-level ' +
+          'TLS configuration.',
+      })
+    }
   })
+
+/** Extracts the host(s) portion of a Mongo connection string (credentials
+ *  stripped), tolerant of multi-host replica-set URIs that aren't valid
+ *  single-authority URLs. */
+function getMongoAuthority(uri: string): string {
+  const withoutScheme = uri.replace(/^mongodb(\+srv)?:\/\//, '')
+  const authority = (withoutScheme.split('/')[0] ?? '').split('?')[0] ?? ''
+  const atIndex = authority.lastIndexOf('@')
+  return (atIndex === -1 ? authority : authority.slice(atIndex + 1)).toLowerCase()
+}
 
 function resolveCorsOrigins(raw: string | undefined): string[] {
   const trimmed = raw?.trim()
@@ -70,6 +116,19 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env) {
     logLevel: env.LOG_LEVEL,
     rateLimit: { windowMs: env.RATE_LIMIT_WINDOW_MS, max: env.RATE_LIMIT_MAX },
     shutdownTimeoutMs: env.SHUTDOWN_TIMEOUT_MS,
+    mongo: {
+      uri: env.MONGODB_URI,
+      dbName: env.MONGODB_DB_NAME,
+      maxPoolSize: env.MONGODB_MAX_POOL_SIZE,
+      minPoolSize: env.MONGODB_MIN_POOL_SIZE,
+      serverSelectionTimeoutMs: env.MONGODB_SERVER_SELECTION_TIMEOUT_MS,
+      socketTimeoutMs: env.MONGODB_SOCKET_TIMEOUT_MS,
+      queryTimeoutMs: env.MONGODB_QUERY_TIMEOUT_MS,
+      initialConnect: {
+        retries: env.MONGODB_INITIAL_CONNECT_RETRIES,
+        retryDelayMs: env.MONGODB_INITIAL_CONNECT_RETRY_DELAY_MS,
+      },
+    },
   }
 }
 

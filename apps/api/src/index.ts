@@ -1,6 +1,7 @@
 import { loadLocalEnvFile, loadConfig, ConfigError, type AppConfig } from './config/env.js'
 import { createLogger } from './lib/logger.js'
 import { createApp } from './app.js'
+import { connectDatabase, disconnectDatabase } from './db/connection.js'
 
 loadLocalEnvFile()
 
@@ -17,6 +18,14 @@ try {
 }
 
 const logger = createLogger(config)
+
+try {
+  await connectDatabase(config, logger)
+} catch (error) {
+  logger.error({ err: error }, 'Failed to connect to MongoDB, exiting')
+  process.exit(1)
+}
+
 const app = createApp(config, logger)
 
 const server = app.listen(config.port, () => {
@@ -40,14 +49,24 @@ function shutdown(signal: string): void {
   forceExitTimer.unref()
 
   server.close((err) => {
-    clearTimeout(forceExitTimer)
-    if (err) {
-      logger.error({ err }, 'Error while closing server')
-      process.exit(1)
-      return
-    }
-    logger.info('Server closed cleanly, exiting')
-    process.exit(0)
+    void (async () => {
+      if (err) {
+        clearTimeout(forceExitTimer)
+        logger.error({ err }, 'Error while closing server')
+        process.exit(1)
+        return
+      }
+
+      try {
+        await disconnectDatabase(logger)
+      } catch (disconnectError) {
+        logger.error({ err: disconnectError }, 'Error while closing MongoDB connection')
+      }
+
+      clearTimeout(forceExitTimer)
+      logger.info('Server closed cleanly, exiting')
+      process.exit(0)
+    })()
   })
 }
 

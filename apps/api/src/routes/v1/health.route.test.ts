@@ -10,6 +10,8 @@ function buildTestApp() {
     NODE_ENV: 'test',
     CORS_ORIGIN: 'http://localhost:5173',
     LOG_LEVEL: 'silent',
+    MONGODB_URI: 'mongodb://localhost:27017',
+    MONGODB_DB_NAME: 'db_001_test',
   } as NodeJS.ProcessEnv)
   const logger = createLogger(config)
   return createApp(config, logger)
