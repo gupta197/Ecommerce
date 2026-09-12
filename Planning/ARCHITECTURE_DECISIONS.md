@@ -39,3 +39,23 @@ Development planning and progress are maintained in repository files and Excel w
 **Status:** Accepted
 
 Use integer minor units consistently for monetary amounts where practical. Never use binary floating-point for financial calculations.
+
+## ADR-009 — Category Is Organization-Owned
+**Status:** Accepted
+
+Category (and, by the same reasoning, Brand when CAT-002 is implemented) is organization-owned, not global/shared, until real multi-organization/marketplace requirements are known. Every category requires `organizationId`, enforced as a mandatory parameter on every repository function. A shared/global category registry is a marketplace concern (MKT-002) to revisit later; starting org-scoped and adding sharing later is a safe additive change, whereas starting global and retrofitting isolation onto already-shared data is not.
+
+## ADR-010 — Category Hierarchy via parentId
+**Status:** Accepted
+
+Category hierarchy is represented with a simple self-referencing `parentId`, not a materialized path or nested sets. This is the simplest approach appropriate for the realistically shallow (2–4 level) category trees this project needs. Deep ancestor/descendant queries, if ever needed, use MongoDB's `$graphLookup` without requiring a schema change.
+
+## ADR-011 — Catalog Lifecycle: DRAFT/ACTIVE/ARCHIVED, Soft Archive, No Cascade
+**Status:** Accepted
+
+Catalog entities (starting with Category) use a `DRAFT | ACTIVE | ARCHIVED` status. Archiving is always soft (status change only, never a hard delete) and never cascades — archiving a parent category does not archive its children. Archived entities remain directly queryable; only default listing views (once they exist) exclude them.
+
+## ADR-012 — Catalog HTTP Routes Deferred Until SEC-002
+**Status:** Accepted
+
+Catalog modules (starting with CAT-001/Category) stop at Service → Repository → Model until SEC-001 (authentication) and SEC-002 (organizations/RBAC) exist. No HTTP routes or controllers are added before then, and no temporary/placeholder authentication or authorization system is introduced to work around the gap. Every repository function requires `organizationId` as a mandatory parameter, so the eventual route layer is a thin wrapper over an already tenant-safe service layer.
