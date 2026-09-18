@@ -85,7 +85,17 @@ export async function changeRole(
       await organizationRepository.incrementActiveOwnerCount(organizationId, session)
     }
 
-    const updated = await membershipRepository.updateRole(membershipId, newRole, session)
+    const updated = await membershipRepository.updateRole(
+      organizationId,
+      membershipId,
+      newRole,
+      session,
+    )
+    if (!updated) {
+      // Defensive only: findActiveById() above already confirmed this exact
+      // (organizationId, membershipId) pair within the same transaction.
+      throw new NotFoundError('Membership not found.')
+    }
     logger.info(
       {
         organizationId: organizationId.toString(),
@@ -95,7 +105,7 @@ export async function changeRole(
       },
       'Membership role changed',
     )
-    return updated as OrganizationMembershipDocument
+    return updated
   })
 }
 
@@ -124,7 +134,12 @@ export async function removeMember(
       }
     }
 
-    await membershipRepository.markRemoved(membershipId, session)
+    const removed = await membershipRepository.markRemoved(organizationId, membershipId, session)
+    if (!removed) {
+      // Defensive only: findActiveById() above already confirmed this exact
+      // (organizationId, membershipId) pair within the same transaction.
+      throw new NotFoundError('Membership not found.')
+    }
     logger.info(
       { organizationId: organizationId.toString(), membershipId: membershipId.toString() },
       'Member removed from organization',

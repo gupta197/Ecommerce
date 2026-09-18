@@ -62,7 +62,7 @@ test('a REMOVED membership can coexist with a newly created ACTIVE membership fo
 
   const session = await mongoose.startSession()
   try {
-    await membershipRepository.markRemoved(original._id, session)
+    await membershipRepository.markRemoved(organizationId, original._id, session)
   } finally {
     await session.endSession()
   }
@@ -97,7 +97,7 @@ test('findActiveByOrgAndUser only matches ACTIVE memberships', async () => {
 
   const session = await mongoose.startSession()
   try {
-    await membershipRepository.markRemoved(membership._id, session)
+    await membershipRepository.markRemoved(organizationId, membership._id, session)
   } finally {
     await session.endSession()
   }
@@ -145,7 +145,7 @@ test('listActiveForOrganization only returns ACTIVE memberships for that organiz
 
   const session = await mongoose.startSession()
   try {
-    await membershipRepository.markRemoved(removedTarget._id, session)
+    await membershipRepository.markRemoved(organizationId, removedTarget._id, session)
   } finally {
     await session.endSession()
   }
@@ -176,36 +176,94 @@ test('listActiveForUser only returns ACTIVE memberships for that user', async ()
   assert.equal(results[0]?._id.toString(), membership._id.toString())
 })
 
-test('updateRole changes the role field', async () => {
+test('updateRole changes the role field when organizationId matches', async () => {
+  const organizationId = oid()
   const membership = await membershipRepository.create({
-    organizationId: oid(),
+    organizationId,
     userId: oid(),
     role: 'MEMBER',
     status: 'ACTIVE',
   })
   const session = await mongoose.startSession()
   try {
-    const updated = await membershipRepository.updateRole(membership._id, 'ADMIN', session)
+    const updated = await membershipRepository.updateRole(
+      organizationId,
+      membership._id,
+      'ADMIN',
+      session,
+    )
     assert.equal(updated?.role, 'ADMIN')
   } finally {
     await session.endSession()
   }
 })
 
-test('markRemoved sets status to REMOVED', async () => {
+test('updateRole is a no-op (returns null, does not mutate) when organizationId does not match — defense-in-depth tenant scoping', async () => {
+  const organizationId = oid()
+  const wrongOrganizationId = oid()
   const membership = await membershipRepository.create({
-    organizationId: oid(),
+    organizationId,
     userId: oid(),
     role: 'MEMBER',
     status: 'ACTIVE',
   })
   const session = await mongoose.startSession()
   try {
-    const updated = await membershipRepository.markRemoved(membership._id, session)
+    const result = await membershipRepository.updateRole(
+      wrongOrganizationId,
+      membership._id,
+      'ADMIN',
+      session,
+    )
+    assert.equal(result, null, 'a membership from another organization must not be mutated')
+  } finally {
+    await session.endSession()
+  }
+
+  const unchanged = await OrganizationMembershipModel.findById(membership._id)
+  assert.equal(unchanged?.role, 'MEMBER', 'the role must remain unchanged')
+})
+
+test('markRemoved sets status to REMOVED when organizationId matches', async () => {
+  const organizationId = oid()
+  const membership = await membershipRepository.create({
+    organizationId,
+    userId: oid(),
+    role: 'MEMBER',
+    status: 'ACTIVE',
+  })
+  const session = await mongoose.startSession()
+  try {
+    const updated = await membershipRepository.markRemoved(organizationId, membership._id, session)
     assert.equal(updated?.status, 'REMOVED')
   } finally {
     await session.endSession()
   }
+})
+
+test('markRemoved is a no-op (returns null, does not mutate) when organizationId does not match — defense-in-depth tenant scoping', async () => {
+  const organizationId = oid()
+  const wrongOrganizationId = oid()
+  const membership = await membershipRepository.create({
+    organizationId,
+    userId: oid(),
+    role: 'MEMBER',
+    status: 'ACTIVE',
+  })
+  const session = await mongoose.startSession()
+  try {
+    const result = await membershipRepository.markRemoved(
+      wrongOrganizationId,
+      membership._id,
+      session,
+    )
+    assert.equal(result, null, 'a membership from another organization must not be removed')
+  } finally {
+    await session.endSession()
+  }
+
+  const unchanged = await OrganizationMembershipModel.findById(membership._id)
+  assert.equal(unchanged?.status, 'ACTIVE', 'the status must remain unchanged')
 })
 
 test('toJSON output never includes __v', async () => {

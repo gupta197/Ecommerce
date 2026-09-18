@@ -78,24 +78,33 @@ export async function listActiveForUser(
   return OrganizationMembershipModel.find({ userId, status: 'ACTIVE' })
 }
 
+/** Defense-in-depth: scoped by organizationId in addition to _id, even
+ *  though every current call site already verifies ownership via
+ *  findActiveById() in the same transaction before calling this. A
+ *  mismatched organizationId matches no document and returns null, rather
+ *  than relying solely on the caller having done that check. */
 export async function updateRole(
+  organizationId: Types.ObjectId,
   membershipId: Types.ObjectId,
   role: MembershipRole,
   session: ClientSession,
 ): Promise<OrganizationMembershipDocument | null> {
   return OrganizationMembershipModel.findOneAndUpdate(
-    { _id: membershipId },
+    { _id: membershipId, organizationId },
     { $set: { role } },
     { session, returnDocument: 'after' },
   )
 }
 
+/** Defense-in-depth: see updateRole()'s note above — same organizationId
+ *  scoping added independently of the pre-existing findActiveById() check. */
 export async function markRemoved(
+  organizationId: Types.ObjectId,
   membershipId: Types.ObjectId,
   session: ClientSession,
 ): Promise<OrganizationMembershipDocument | null> {
   return OrganizationMembershipModel.findOneAndUpdate(
-    { _id: membershipId },
+    { _id: membershipId, organizationId },
     { $set: { status: 'REMOVED' } },
     { session, returnDocument: 'after' },
   )

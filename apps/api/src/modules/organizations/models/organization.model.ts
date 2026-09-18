@@ -20,7 +20,11 @@ const organizationSchema = new Schema<OrganizationAttrs>(
   {
     name: { type: String, required: true, trim: true, maxlength: 200 },
     status: { type: String, enum: ORGANIZATION_STATUSES, required: true, default: 'ACTIVE' },
-    activeOwnerCount: { type: Number, required: true, default: 0 },
+    // min: 0 is defense-in-depth only — the application-level counter logic
+    // (repositories/organization.repository.ts's guarded atomic increment/
+    // decrement) already makes a negative value unreachable through normal
+    // operation; this guards against a direct create/save with a bad literal.
+    activeOwnerCount: { type: Number, required: true, default: 0, min: 0 },
   },
   {
     collection: 'organizations',

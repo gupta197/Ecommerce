@@ -137,6 +137,18 @@ test('decrementActiveOwnerCountIfSafe returns null (and does not decrement) when
   assert.equal(after1?.activeOwnerCount, 1)
 })
 
+test('a negative activeOwnerCount is rejected by normal model validation (min: 0)', async () => {
+  await assert.rejects(() =>
+    organizationRepository.create({
+      name: 'Negative Count Org',
+      status: 'ACTIVE',
+      activeOwnerCount: -1,
+    }),
+  )
+  const persisted = await OrganizationModel.findOne({ name: 'Negative Count Org' })
+  assert.equal(persisted, null, 'the document must not be persisted')
+})
+
 test('toJSON output never includes __v', async () => {
   const organization = await organizationRepository.create({
     name: 'JSON Test',
