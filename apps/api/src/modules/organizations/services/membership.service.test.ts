@@ -6,6 +6,7 @@ import pino from 'pino'
 import { OrganizationModel } from '../models/organization.model.js'
 import { OrganizationMembershipModel } from '../models/organization-membership.model.js'
 import { UserModel } from '../../auth/models/user.model.js'
+import { AuditEventModel } from '../../audit/models/audit-event.model.js'
 import { createOrganization } from './organization.service.js'
 import { addMember, listMembers, changeRole, removeMember } from './membership.service.js'
 import { ForbiddenError, NotFoundError } from '../../../lib/http-errors.js'
@@ -19,6 +20,7 @@ before(async () => {
     OrganizationModel.init(),
     OrganizationMembershipModel.init(),
     UserModel.init(),
+    AuditEventModel.init(),
   ])
 })
 
@@ -32,6 +34,7 @@ beforeEach(async () => {
     OrganizationModel.deleteMany({}),
     OrganizationMembershipModel.deleteMany({}),
     UserModel.deleteMany({}),
+    AuditEventModel.deleteMany({}),
   ])
 })
 
@@ -235,4 +238,112 @@ test('self-management: sole OWNER removing self is blocked (final-owner protecti
     () => removeMember(org._id, ownerMembership!._id, silentLogger),
     ForbiddenError,
   )
+})
+
+// ---------------------------------------------------------------------------
+// SEC-003: audit events (additive — does not modify any assertion above)
+// ---------------------------------------------------------------------------
+
+test('addMember produces a membership.added AuditEvent', async () => {
+  const ownerId = new Types.ObjectId()
+  const org = await createOrganization({ name: 'AuditAddOrg' }, ownerId, silentLogger)
+  const newUser = await createRealUser('audit-add@example.com')
+
+  const membership = await addMember(org._id, newUser._id, silentLogger)
+
+  const events = await AuditEventModel.find({ action: 'membership.added' })
+  assert.equal(events.length, 1)
+  assert.equal(events[0]?.outcome, 'SUCCESS')
+  assert.equal(events[0]?.entityType, 'OrganizationMembership')
+  assert.equal(events[0]?.entityId?.toString(), membership._id.toString())
+  assert.equal(events[0]?.organizationId?.toString(), org._id.toString())
+})
+
+test('changeRole (genuine transition) produces a membership.role_changed AuditEvent only after the transaction commits', async () => {
+  const ownerId = new Types.ObjectId()
+  const org = await createOrganization({ name: 'AuditRoleOrg' }, ownerId, silentLogger)
+  const user2 = await createRealUser('audit-role@example.com')
+  const membership = await addMember(org._id, user2._id, silentLogger)
+
+  await changeRole(org._id, membership._id, 'ADMIN', silentLogger)
+
+  const events = await AuditEventModel.find({ action: 'membership.role_changed' })
+  assert.equal(events.length, 1)
+  assert.equal(events[0]?.outcome, 'SUCCESS')
+  assert.equal(events[0]?.entityType, 'OrganizationMembership')
+  const metadata = events[0]?.metadata as Record<string, unknown>
+  assert.equal(metadata.fromRole, 'MEMBER')
+  assert.equal(metadata.toRole, 'ADMIN')
+})
+
+test('changeRole no-op (same role requested) produces NO membership.role_changed AuditEvent', async () => {
+  const ownerId = new Types.ObjectId()
+  const org = await createOrganization({ name: 'AuditNoOpOrg' }, ownerId, silentLogger)
+  const ownerMembership = await OrganizationMembershipModel.findOne({ organizationId: org._id })
+
+  await changeRole(org._id, ownerMembership!._id, 'OWNER', silentLogger)
+
+  const events = await AuditEventModel.find({ action: 'membership.role_changed' })
+  assert.equal(events.length, 0)
+})
+
+test('changeRole rejected by last-owner protection produces NO membership.role_changed AuditEvent', async () => {
+  const ownerId = new Types.ObjectId()
+  const org = await createOrganization({ name: 'AuditLastOwnerRoleOrg' }, ownerId, silentLogger)
+  const ownerMembership = await OrganizationMembershipModel.findOne({ organizationId: org._id })
+
+  await assert.rejects(() => changeRole(org._id, ownerMembership!._id, 'ADMIN', silentLogger))
+
+  const events = await AuditEventModel.find({ action: 'membership.role_changed' })
+  assert.equal(
+    events.length,
+    0,
+    'a rejected (non-committed) role change must not produce an audit event',
+  )
+})
+
+test('removeMember produces a membership.removed AuditEvent only after the transaction commits', async () => {
+  const ownerId = new Types.ObjectId()
+  const org = await createOrganization({ name: 'AuditRemoveOrg' }, ownerId, silentLogger)
+  const user2 = await createRealUser('audit-remove@example.com')
+  const membership = await addMember(org._id, user2._id, silentLogger)
+
+  await removeMember(org._id, membership._id, silentLogger)
+
+  const events = await AuditEventModel.find({ action: 'membership.removed' })
+  assert.equal(events.length, 1)
+  assert.equal(events[0]?.outcome, 'SUCCESS')
+  assert.equal(events[0]?.entityId?.toString(), membership._id.toString())
+})
+
+test('removeMember rejected by last-owner protection produces NO membership.removed AuditEvent', async () => {
+  const ownerId = new Types.ObjectId()
+  const org = await createOrganization({ name: 'AuditLastOwnerRemoveOrg' }, ownerId, silentLogger)
+  const ownerMembership = await OrganizationMembershipModel.findOne({ organizationId: org._id })
+
+  await assert.rejects(() => removeMember(org._id, ownerMembership!._id, silentLogger))
+
+  const events = await AuditEventModel.find({ action: 'membership.removed' })
+  assert.equal(
+    events.length,
+    0,
+    'a rejected (non-committed) removal must not produce an audit event',
+  )
+})
+
+test('an audit-write failure never prevents addMember from succeeding (best-effort, non-blocking)', async () => {
+  const ownerId = new Types.ObjectId()
+  const org = await createOrganization({ name: 'AuditResilientAddOrg' }, ownerId, silentLogger)
+  const newUser = await createRealUser('audit-resilient@example.com')
+
+  const original = AuditEventModel.create.bind(AuditEventModel)
+  AuditEventModel.create = (async () => {
+    throw new Error('deliberate audit write failure')
+  }) as typeof AuditEventModel.create
+  try {
+    const membership = await addMember(org._id, newUser._id, silentLogger)
+    assert.equal(membership.role, 'MEMBER')
+  } finally {
+    AuditEventModel.create = original
+  }
 })

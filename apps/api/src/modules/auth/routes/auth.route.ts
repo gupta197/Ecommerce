@@ -73,7 +73,7 @@ export function createAuthRouter(options: CreateAuthRouterOptions): Router {
   }
 
   router.post('/register', authRateLimiter, async (req, res) => {
-    await authService.register(req.body, requestContext(req))
+    await authService.register(req.body, requestContext(req), options.logger)
     sendSuccess(
       res,
       { message: 'If this email is available, your account has been created. Please log in.' },
@@ -87,6 +87,7 @@ export function createAuthRouter(options: CreateAuthRouterOptions): Router {
       req.body,
       requestContext(req),
       options.authConfig,
+      options.logger,
     )
     setAuthCookies(res, tokens)
     sendSuccess(res, { id: user._id, email: user.email })
@@ -99,6 +100,7 @@ export function createAuthRouter(options: CreateAuthRouterOptions): Router {
     await authService.logoutCurrentSession(
       new Types.ObjectId(req.auth.userId),
       new Types.ObjectId(req.auth.sessionId),
+      options.logger,
     )
     clearAuthCookies(res)
     sendSuccess(res, { loggedOut: true })
@@ -135,6 +137,7 @@ export function createAuthRouter(options: CreateAuthRouterOptions): Router {
     const session = await authService.revokeSession(
       new Types.ObjectId(req.auth.userId),
       new Types.ObjectId(id),
+      options.logger,
     )
     sendSuccess(res, session)
   })
@@ -146,6 +149,7 @@ export function createAuthRouter(options: CreateAuthRouterOptions): Router {
     await authService.revokeOtherSessions(
       new Types.ObjectId(req.auth.userId),
       new Types.ObjectId(req.auth.sessionId),
+      options.logger,
     )
     sendSuccess(res, { revoked: true })
   })

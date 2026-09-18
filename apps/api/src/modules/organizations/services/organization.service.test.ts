@@ -5,6 +5,7 @@ import mongoose, { Types } from 'mongoose'
 import pino from 'pino'
 import { OrganizationModel } from '../models/organization.model.js'
 import { OrganizationMembershipModel } from '../models/organization-membership.model.js'
+import { AuditEventModel } from '../../audit/models/audit-event.model.js'
 import {
   createOrganization,
   listOrganizationsForUser,
@@ -20,7 +21,11 @@ let replSet: MongoMemoryReplSet
 before(async () => {
   replSet = await MongoMemoryReplSet.create({ replSet: { count: 1 } })
   await mongoose.connect(replSet.getUri(), { dbName: 'sec_002_org_service_test' })
-  await Promise.all([OrganizationModel.init(), OrganizationMembershipModel.init()])
+  await Promise.all([
+    OrganizationModel.init(),
+    OrganizationMembershipModel.init(),
+    AuditEventModel.init(),
+  ])
 })
 
 after(async () => {
@@ -29,7 +34,11 @@ after(async () => {
 })
 
 beforeEach(async () => {
-  await Promise.all([OrganizationModel.deleteMany({}), OrganizationMembershipModel.deleteMany({})])
+  await Promise.all([
+    OrganizationModel.deleteMany({}),
+    OrganizationMembershipModel.deleteMany({}),
+    AuditEventModel.deleteMany({}),
+  ])
 })
 
 const silentLogger = pino({ level: 'silent' })
@@ -131,4 +140,98 @@ test('updateOrganization patches name/status but never activeOwnerCount (not par
   assert.equal(updated.name, 'Renamed')
   assert.equal(updated.status, 'SUSPENDED')
   assert.equal(updated.activeOwnerCount, 1)
+})
+
+// ---------------------------------------------------------------------------
+// SEC-003: audit events (additive — does not modify any assertion above)
+// ---------------------------------------------------------------------------
+
+test('createOrganization produces an organization.created AuditEvent only after the transaction commits', async () => {
+  const userId = new Types.ObjectId()
+  const organization = await createOrganization({ name: 'Audited Org' }, userId, silentLogger)
+
+  const events = await AuditEventModel.find({ action: 'organization.created' })
+  assert.equal(events.length, 1)
+  assert.equal(events[0]?.outcome, 'SUCCESS')
+  assert.equal(events[0]?.severity, 'INFO')
+  assert.equal(events[0]?.entityType, 'Organization')
+  assert.equal(events[0]?.entityId?.toString(), organization._id.toString())
+  assert.equal(events[0]?.organizationId?.toString(), organization._id.toString())
+  assert.equal(events[0]?.actorUserId?.toString(), userId.toString())
+})
+
+test('createOrganization rollback produces NO organization.created AuditEvent', async () => {
+  const userId = new Types.ObjectId()
+  const originalCreate = OrganizationMembershipModel.create.bind(OrganizationMembershipModel)
+  OrganizationMembershipModel.create = (async () => {
+    throw new Error('deliberate membership-creation failure')
+  }) as typeof OrganizationMembershipModel.create
+
+  try {
+    await assert.rejects(() =>
+      createOrganization({ name: 'Rollback Audit Org' }, userId, silentLogger),
+    )
+  } finally {
+    OrganizationMembershipModel.create = originalCreate
+  }
+
+  const events = await AuditEventModel.find({ action: 'organization.created' })
+  assert.equal(events.length, 0, 'no audit event may exist for an operation that never committed')
+})
+
+test('updateOrganization with status SUSPENDED produces an organization.suspended AuditEvent', async () => {
+  const userId = new Types.ObjectId()
+  const org = await createOrganization({ name: 'Suspend Audit Org' }, userId, silentLogger)
+
+  await updateOrganization(org._id, { status: 'SUSPENDED' }, silentLogger)
+
+  const events = await AuditEventModel.find({ action: 'organization.suspended' })
+  assert.equal(events.length, 1)
+  assert.equal(events[0]?.outcome, 'SUCCESS')
+  assert.equal(events[0]?.entityType, 'Organization')
+  assert.equal(events[0]?.entityId?.toString(), org._id.toString())
+})
+
+test('updateOrganization with a redundant status:ACTIVE (no genuine reactivation possible) produces NO additional AuditEvent', async () => {
+  const userId = new Types.ObjectId()
+  const org = await createOrganization({ name: 'No Reactivation Org' }, userId, silentLogger)
+  // Exactly one event exists so far: organization.created from setup above.
+  const beforeCount = await AuditEventModel.countDocuments({})
+  assert.equal(beforeCount, 1)
+
+  // org is already ACTIVE — this is the only reachable trigger for the
+  // pre-existing 'ACTIVE' branch, and it is not a genuine transition.
+  // "organization.reactivated" is not even a valid value of the AuditAction
+  // enum (see models/audit-event.model.ts) — it was deliberately never
+  // added, precisely because it can never genuinely occur.
+  await updateOrganization(org._id, { status: 'ACTIVE' }, silentLogger)
+
+  const afterCount = await AuditEventModel.countDocuments({})
+  assert.equal(afterCount, 1, 'the no-op ACTIVE branch must not produce any new audit event')
+})
+
+test('updateOrganization with a name-only patch produces no AuditEvent', async () => {
+  const userId = new Types.ObjectId()
+  const org = await createOrganization({ name: 'Rename Only Org' }, userId, silentLogger)
+
+  await updateOrganization(org._id, { name: 'Renamed Only' }, silentLogger)
+
+  const events = await AuditEventModel.find({})
+  assert.equal(events.length, 1, 'only the organization.created event from setup should exist')
+  assert.equal(events[0]?.action, 'organization.created')
+})
+
+test('an audit-write failure never prevents createOrganization from succeeding (best-effort, non-blocking)', async () => {
+  const userId = new Types.ObjectId()
+  const original = AuditEventModel.create.bind(AuditEventModel)
+  AuditEventModel.create = (async () => {
+    throw new Error('deliberate audit write failure')
+  }) as typeof AuditEventModel.create
+
+  try {
+    const organization = await createOrganization({ name: 'Resilient Org' }, userId, silentLogger)
+    assert.equal(organization.name, 'Resilient Org')
+  } finally {
+    AuditEventModel.create = original
+  }
 })

@@ -12,6 +12,7 @@ import { SecuritySessionModel } from '../../auth/models/security-session.model.j
 import { LoginAttemptModel } from '../../auth/models/login-attempt.model.js'
 import { OrganizationModel } from '../models/organization.model.js'
 import { OrganizationMembershipModel } from '../models/organization-membership.model.js'
+import { AuditEventModel } from '../../audit/models/audit-event.model.js'
 
 // POST /organizations triggers the atomic org+owner-membership transaction —
 // a real (even single-node) replica set is required, not a standalone server.
@@ -48,6 +49,7 @@ beforeEach(async () => {
     LoginAttemptModel.deleteMany({}),
     OrganizationModel.deleteMany({}),
     OrganizationMembershipModel.deleteMany({}),
+    AuditEventModel.deleteMany({}),
   ])
 })
 
@@ -435,4 +437,21 @@ test('the sole OWNER cannot be removed via the route (last-owner protection end-
     .set('Cookie', cookieOwner)
 
   assert.equal(res.status, 403)
+})
+
+// ---------------------------------------------------------------------------
+// SEC-003: audit events — end-to-end spot check (additive)
+// ---------------------------------------------------------------------------
+
+test('POST /organizations end-to-end produces an organization.created AuditEvent', async () => {
+  const cookie = await registerAndLogin('audite2e@example.com', PASSWORD)
+
+  const res = await request(app)
+    .post('/api/v1/organizations')
+    .set('Cookie', cookie)
+    .send({ name: 'Audit E2E Org' })
+
+  const events = await AuditEventModel.find({ action: 'organization.created' })
+  assert.equal(events.length, 1)
+  assert.equal(events[0]?.entityId?.toString(), res.body.data._id)
 })

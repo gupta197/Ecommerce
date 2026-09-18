@@ -8,6 +8,7 @@ import pino from 'pino'
 import { UserModel } from '../models/user.model.js'
 import { SecuritySessionModel } from '../models/security-session.model.js'
 import { LoginAttemptModel } from '../models/login-attempt.model.js'
+import { AuditEventModel } from '../../audit/models/audit-event.model.js'
 import * as userRepository from '../repositories/user.repository.js'
 import * as securitySessionRepository from '../repositories/security-session.repository.js'
 import { hashPassword } from './password.service.js'
@@ -29,7 +30,12 @@ let mongod: MongoMemoryServer
 before(async () => {
   mongod = await MongoMemoryServer.create()
   await mongoose.connect(mongod.getUri(), { dbName: 'sec_001_auth_service_test' })
-  await Promise.all([UserModel.init(), SecuritySessionModel.init(), LoginAttemptModel.init()])
+  await Promise.all([
+    UserModel.init(),
+    SecuritySessionModel.init(),
+    LoginAttemptModel.init(),
+    AuditEventModel.init(),
+  ])
 })
 
 after(async () => {
@@ -42,6 +48,7 @@ beforeEach(async () => {
     UserModel.deleteMany({}),
     SecuritySessionModel.deleteMany({}),
     LoginAttemptModel.deleteMany({}),
+    AuditEventModel.deleteMany({}),
   ])
 })
 
@@ -514,4 +521,220 @@ test('logoutCurrentSession revokes exactly that session', async () => {
 
   const after = await SecuritySessionModel.findById(session!._id)
   assert.equal(after?.status, 'REVOKED')
+})
+
+// ---------------------------------------------------------------------------
+// SEC-003: audit events (additive — does not modify any assertion above)
+// ---------------------------------------------------------------------------
+
+test('successful registration creates an auth.registration.success AuditEvent', async () => {
+  await register(
+    { email: 'audit-reg-success@example.com', password: 'a-long-enough-password' },
+    {},
+    silentLogger,
+  )
+  const events = await AuditEventModel.find({ action: 'auth.registration.success' })
+  assert.equal(events.length, 1)
+  assert.equal(events[0]?.outcome, 'SUCCESS')
+  assert.equal(events[0]?.severity, 'INFO')
+  assert.equal(events[0]?.entityType, 'User')
+  assert.ok(events[0]?.entityId)
+  assert.ok(events[0]?.actorUserId)
+})
+
+test('duplicate-email registration creates an auth.registration.failure AuditEvent with no actorUserId/entityId, and no secret leaks', async () => {
+  await createActiveUser('audit-reg-dup@example.com', 'original-password-123')
+  await register(
+    { email: 'audit-reg-dup@example.com', password: 'attacker-password-123' },
+    {},
+    silentLogger,
+  )
+  const events = await AuditEventModel.find({ action: 'auth.registration.failure' })
+  assert.equal(events.length, 1)
+  assert.equal(events[0]?.outcome, 'FAILURE')
+  assert.equal(events[0]?.actorUserId, undefined)
+  assert.equal(events[0]?.entityId, undefined)
+  const metadata = events[0]?.metadata as Record<string, unknown>
+  assert.equal(metadata.email, 'audit-reg-dup@example.com')
+  assert.equal(JSON.stringify(events[0]).includes('attacker-password-123'), false)
+})
+
+test('successful login creates an auth.login.success AuditEvent', async () => {
+  await createActiveUser('audit-login-success@example.com', 'correct-password-123')
+  await login(
+    { email: 'audit-login-success@example.com', password: 'correct-password-123' },
+    {},
+    TEST_CONFIG,
+    silentLogger,
+  )
+  const events = await AuditEventModel.find({ action: 'auth.login.success' })
+  assert.equal(events.length, 1)
+  assert.equal(events[0]?.outcome, 'SUCCESS')
+  assert.equal(events[0]?.severity, 'INFO')
+  assert.equal(events[0]?.entityType, 'User')
+  assert.ok(events[0]?.actorUserId)
+  assert.ok(events[0]?.entityId)
+})
+
+test('auth.login.failure NEVER populates actorUserId or entityId, across all four failure branches, and never leaks the submitted password', async () => {
+  const user = await createActiveUser('audit-login-fail@example.com', 'correct-password-123')
+
+  // Branch 1: unknown email.
+  await assert.rejects(() =>
+    login(
+      { email: 'nobody-audit@example.com', password: 'whatever-123' },
+      {},
+      TEST_CONFIG,
+      silentLogger,
+    ),
+  )
+  // Branch 2: wrong password.
+  await assert.rejects(() =>
+    login(
+      { email: 'audit-login-fail@example.com', password: 'totally-wrong-password' },
+      {},
+      TEST_CONFIG,
+      silentLogger,
+    ),
+  )
+  // Branch 3: account disabled.
+  await UserModel.updateOne({ _id: user._id }, { $set: { status: 'DISABLED' } })
+  await assert.rejects(() =>
+    login(
+      { email: 'audit-login-fail@example.com', password: 'correct-password-123' },
+      {},
+      TEST_CONFIG,
+      silentLogger,
+    ),
+  )
+  await UserModel.updateOne({ _id: user._id }, { $set: { status: 'ACTIVE' } })
+  // Branch 4: throttled (force the throttle timestamp directly).
+  await UserModel.updateOne(
+    { _id: user._id },
+    { $set: { nextAttemptAllowedAt: new Date(Date.now() + 60_000) } },
+  )
+  await assert.rejects(() =>
+    login(
+      { email: 'audit-login-fail@example.com', password: 'correct-password-123' },
+      {},
+      TEST_CONFIG,
+      silentLogger,
+    ),
+  )
+
+  const events = await AuditEventModel.find({ action: 'auth.login.failure' }).sort({ createdAt: 1 })
+  assert.equal(events.length, 4)
+  const reasons = events.map((e) => (e.metadata as Record<string, unknown>).reason)
+  assert.deepEqual(reasons, [
+    'INVALID_CREDENTIALS',
+    'INVALID_CREDENTIALS',
+    'ACCOUNT_DISABLED',
+    'THROTTLED',
+  ])
+  for (const event of events) {
+    assert.equal(event.outcome, 'FAILURE')
+    assert.equal(event.severity, 'WARNING')
+    assert.equal(event.actorUserId, undefined, 'actorUserId must never be set on a login failure')
+    assert.equal(event.entityId, undefined, 'entityId must never be set on a login failure')
+    assert.equal(JSON.stringify(event).includes('totally-wrong-password'), false)
+    assert.equal(JSON.stringify(event).includes('correct-password-123'), false)
+  }
+})
+
+test('refresh token reuse creates an auth.refresh_token_reuse AuditEvent without leaking the plaintext token', async () => {
+  await createActiveUser('audit-reuse@example.com', 'correct-password-123')
+  const { tokens } = await login(
+    { email: 'audit-reuse@example.com', password: 'correct-password-123' },
+    {},
+    TEST_CONFIG,
+  )
+  await refresh(tokens.refreshToken, {}, TEST_CONFIG, silentLogger)
+  await assert.rejects(() => refresh(tokens.refreshToken, {}, TEST_CONFIG, silentLogger))
+
+  const events = await AuditEventModel.find({ action: 'auth.refresh_token_reuse' })
+  assert.equal(events.length, 1)
+  assert.equal(events[0]?.outcome, 'FAILURE')
+  assert.equal(events[0]?.severity, 'WARNING')
+  assert.equal(events[0]?.entityType, 'SecuritySession')
+  assert.ok(events[0]?.actorUserId)
+  assert.ok(events[0]?.entityId)
+  assert.equal(JSON.stringify(events[0]).includes(tokens.refreshToken), false)
+})
+
+test('logoutCurrentSession creates an auth.logout AuditEvent', async () => {
+  const user = await createActiveUser('audit-logout@example.com', 'correct-password-123')
+  await login(
+    { email: 'audit-logout@example.com', password: 'correct-password-123' },
+    {},
+    TEST_CONFIG,
+  )
+  const session = await SecuritySessionModel.findOne({ userId: user._id })
+
+  await logoutCurrentSession(user._id, session!._id, silentLogger)
+
+  const events = await AuditEventModel.find({ action: 'auth.logout' })
+  assert.equal(events.length, 1)
+  assert.equal(events[0]?.outcome, 'SUCCESS')
+  assert.equal(events[0]?.entityType, 'SecuritySession')
+  assert.equal(events[0]?.actorUserId?.toString(), user._id.toString())
+  assert.equal(events[0]?.entityId?.toString(), session!._id.toString())
+})
+
+test('revokeSession creates an auth.session.revoke AuditEvent', async () => {
+  const user = await createActiveUser('audit-revoke@example.com', 'correct-password-123')
+  await login(
+    { email: 'audit-revoke@example.com', password: 'correct-password-123' },
+    {},
+    TEST_CONFIG,
+  )
+  const session = await SecuritySessionModel.findOne({ userId: user._id })
+
+  await revokeSession(user._id, session!._id, silentLogger)
+
+  const events = await AuditEventModel.find({ action: 'auth.session.revoke' })
+  assert.equal(events.length, 1)
+  assert.equal(events[0]?.outcome, 'SUCCESS')
+  assert.equal(events[0]?.entityType, 'SecuritySession')
+})
+
+test('revokeOtherSessions creates an auth.session.revoke_others AuditEvent', async () => {
+  const user = await createActiveUser('audit-revoke-others@example.com', 'correct-password-123')
+  await login(
+    { email: 'audit-revoke-others@example.com', password: 'correct-password-123' },
+    {},
+    TEST_CONFIG,
+  )
+  const second = await login(
+    { email: 'audit-revoke-others@example.com', password: 'correct-password-123' },
+    {},
+    TEST_CONFIG,
+  )
+  const session = await SecuritySessionModel.findOne({ userId: user._id }).sort({ createdAt: -1 })
+  void second
+
+  await revokeOtherSessions(user._id, session!._id, silentLogger)
+
+  const events = await AuditEventModel.find({ action: 'auth.session.revoke_others' })
+  assert.equal(events.length, 1)
+  assert.equal(events[0]?.outcome, 'SUCCESS')
+})
+
+test('an audit-write failure never prevents a successful login (best-effort, non-blocking)', async () => {
+  await createActiveUser('audit-resilience@example.com', 'correct-password-123')
+
+  const original = AuditEventModel.create.bind(AuditEventModel)
+  AuditEventModel.create = (async () => {
+    throw new Error('deliberate audit write failure')
+  }) as typeof AuditEventModel.create
+  try {
+    const { user } = await login(
+      { email: 'audit-resilience@example.com', password: 'correct-password-123' },
+      {},
+      TEST_CONFIG,
+      silentLogger,
+    )
+    assert.equal(user.email, 'audit-resilience@example.com')
+  } finally {
+    AuditEventModel.create = original
+  }
 })
