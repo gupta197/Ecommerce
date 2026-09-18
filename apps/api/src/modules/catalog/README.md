@@ -1,9 +1,9 @@
-# Catalog Module — Category (CAT-001) & Brand (CAT-002)
+# Catalog Module — Category (CAT-001), Brand (CAT-002) & Product (CAT-003)
 
-This module currently implements **Category and Brand** (CAT-001 and CAT-002
-in `Planning/MASTER_TASK_LIST.xlsx`). Product (CAT-003) and ProductVariant
-(CAT-004) are separate, later tasks — this file documents Category and Brand
-only and will be extended by those tasks, not rewritten by them.
+This module currently implements **Category, Brand, and Product** (CAT-001,
+CAT-002, and CAT-003 in `Planning/MASTER_TASK_LIST.xlsx`). ProductVariant
+(CAT-004) is a separate, later task — this file documents the three
+completed entities and will be extended by CAT-004, not rewritten by it.
 
 ## Layering
 
@@ -168,8 +168,72 @@ Product to reference an archived Brand is CAT-003's decision — Brand has
 no self-referential parent concept, so there's no equivalent check to add
 on this side.
 
+## Product
+
+Product (CAT-003) follows the same `Service → Repository → Model` layering
+as Category and Brand. **No routes/controllers were added for Product
+either** — deferred by explicit decision, not because SEC-002 doesn't exist
+(it does; SEC-002 is `COMPLETED`). Building routes for Product alone, while
+Category and Brand remain routeless, would be an inconsistent mid-catalog
+scope jump; a Product without any priced, purchasable Variant (CAT-004
+doesn't exist yet) has limited value exposed via a real API today. The
+route layer for the whole catalog domain remains a later, explicitly
+separate decision.
+
+**Organization ownership**: same as Category/Brand — org-owned, every
+repository function requires `organizationId` as a mandatory parameter.
+
+**No Variant fields**: per CLAUDE.md §6.2 and the CAT-004 task row, SKU,
+barcode, price, compare-at price, cost, inventory references, and
+size/color/other variant-differentiating attributes all belong to
+`ProductVariant` (CAT-004), not Product. Product in this task is identity
+(name/slug/description), categorization, media, and lifecycle only — no
+weight or dimensions field either, since neither is required by CAT-003's
+own scope or named by CLAUDE.md's Product/Variant field lists.
+
+**Category and Brand references**: `categoryId` and `brandId` are both
+**optional**, and `categoryId` supports exactly **one** category per
+product (no multi-category tagging in this task). Both are validated
+exactly like Category's own `parentId` — re-fetched scoped by
+`organizationId` (a cross-organization reference is indistinguishable from
+"doesn't exist," never trusted from a syntactically valid ObjectId alone)
+and rejected if the referenced Category/Brand is `ARCHIVED`. This resolves
+the open question Brand's own section above left for CAT-003: a Product
+**cannot newly reference** an archived Category or Brand, but if a
+Category or Brand referenced by an _existing_ Product is archived
+afterward, the Product is never cascaded, modified, or auto-archived —
+consistent with `ADR-011`'s "archiving never cascades" principle extended
+to this new cross-collection case. `assertValidCategory`/`assertValidBrand`
+are two small, near-identical functions in `product.service.ts` — not a
+generic `assertValidReference<T>` abstraction, since two concrete call
+sites don't justify one.
+
+**Media**: an optional array of `{ url: string, altText?: string }` items
+(the exact same shape as Brand's `logo`, just plural) — no upload/storage
+infrastructure, no signed URLs, no binary data in MongoDB (`DEC-002`,
+object storage provider, remains unresolved in `Planning/OPEN_DECISIONS.md`).
+Capped at **10 items**; array order is display order; there is no
+`isPrimary` flag. URL validation reuses the exact same `.url()` depth
+Brand's `logo.url` already uses — not a stricter, Product-only rule.
+
+**Slug, lifecycle, indexes**: identical rules to Category/Brand — the same
+`lib/slugify.ts`, `{organizationId, slug}` uniqueness with collision
+suffixing and explicit-duplicate rejection, the same `DRAFT | ACTIVE |
+ARCHIVED` soft-archive lifecycle (`ADR-011`). Two additional non-unique
+indexes, `{organizationId, categoryId, status}` and `{organizationId,
+brandId, status}`, support the two most obvious catalog-browsing queries
+("active products in category X" / "of brand Y") — mirroring Category's
+own `{organizationId, parentId, sortOrder}` listing-index precedent. No
+`sortOrder` field on Product — there is no sibling-ordering concept the
+way Category's children have one.
+
+**No audit-event wiring**: consistent with SEC-003's own explicit
+deferral of catalog audit integration "until catalog has a route layer" —
+since Product has no HTTP-reachable action yet either, there is nothing
+new to audit.
+
 ## Testing
 
 `mongodb-memory-server`'s `MongoMemoryServer` (standalone) — no transactions
-are needed for category or brand CRUD, so a replica set isn't required
-here.
+are needed for category, brand, or product CRUD, so a replica set isn't
+required here.
