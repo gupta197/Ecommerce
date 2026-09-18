@@ -226,18 +226,25 @@ export async function logoutCurrentSession(
   sessionId: Types.ObjectId,
   logger?: Logger,
 ): Promise<void> {
-  await securitySessionRepository.revokeById(userId, sessionId, new Date())
-  await auditService.record(
-    {
-      actorUserId: userId,
-      action: 'auth.logout',
-      entityType: 'SecuritySession',
-      entityId: sessionId,
-      outcome: 'SUCCESS',
-      severity: 'INFO',
-    },
-    logger,
-  )
+  const revoked = await securitySessionRepository.revokeById(userId, sessionId, new Date())
+  // Audit-fidelity fix (SEC-003 security review, LOW finding): only record a
+  // successful auth.logout event when revokeById() actually found and
+  // revoked a matching session, mirroring revokeSession()'s existing
+  // check-before-audit pattern. Business behavior is otherwise unchanged —
+  // logoutCurrentSession() still does not throw when nothing matched.
+  if (revoked) {
+    await auditService.record(
+      {
+        actorUserId: userId,
+        action: 'auth.logout',
+        entityType: 'SecuritySession',
+        entityId: sessionId,
+        outcome: 'SUCCESS',
+        severity: 'INFO',
+      },
+      logger,
+    )
+  }
 }
 
 export async function listSessions(userId: Types.ObjectId): Promise<SecuritySessionDocument[]> {

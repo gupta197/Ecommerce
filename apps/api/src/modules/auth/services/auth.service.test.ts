@@ -680,6 +680,33 @@ test('logoutCurrentSession creates an auth.logout AuditEvent', async () => {
   assert.equal(events[0]?.entityId?.toString(), session!._id.toString())
 })
 
+test('logoutCurrentSession does NOT create an auth.logout AuditEvent when revokeById finds nothing to revoke', async () => {
+  const user = await createActiveUser('audit-logout-noop@example.com', 'correct-password-123')
+  await login(
+    { email: 'audit-logout-noop@example.com', password: 'correct-password-123' },
+    {},
+    TEST_CONFIG,
+  )
+
+  // A sessionId that does not correspond to any SecuritySession document for
+  // this user — e.g. the real-world case of a stale access token whose
+  // session was already TTL-expired or revoked from elsewhere by the time
+  // this logout call runs. revokeById's {_id, userId} filter matches
+  // nothing, so it returns null.
+  const nonexistentSessionId = new Types.ObjectId()
+
+  await assert.doesNotReject(() =>
+    logoutCurrentSession(user._id, nonexistentSessionId, silentLogger),
+  )
+
+  const events = await AuditEventModel.find({ action: 'auth.logout' })
+  assert.equal(
+    events.length,
+    0,
+    'a no-op logout (nothing actually revoked) must not create a misleading auth.logout SUCCESS event',
+  )
+})
+
 test('revokeSession creates an auth.session.revoke AuditEvent', async () => {
   const user = await createActiveUser('audit-revoke@example.com', 'correct-password-123')
   await login(
