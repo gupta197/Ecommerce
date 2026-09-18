@@ -1,9 +1,8 @@
-# Catalog Module — Category (CAT-001), Brand (CAT-002) & Product (CAT-003)
+# Catalog Module — Category (CAT-001), Brand (CAT-002), Product (CAT-003) & ProductVariant (CAT-004)
 
-This module currently implements **Category, Brand, and Product** (CAT-001,
-CAT-002, and CAT-003 in `Planning/MASTER_TASK_LIST.xlsx`). ProductVariant
-(CAT-004) is a separate, later task — this file documents the three
-completed entities and will be extended by CAT-004, not rewritten by it.
+This module implements **Category, Brand, Product, and ProductVariant**
+(CAT-001 through CAT-004 in `Planning/MASTER_TASK_LIST.xlsx`). This file
+documents all four completed entities.
 
 ## Layering
 
@@ -232,8 +231,121 @@ deferral of catalog audit integration "until catalog has a route layer" —
 since Product has no HTTP-reachable action yet either, there is nothing
 new to audit.
 
+## ProductVariant
+
+ProductVariant (CAT-004) follows the same `Service → Repository → Model`
+layering as Category, Brand, and Product. **No routes/controllers were added
+here either** — same deferral reasoning as Product's own section above.
+**No SEC-003 audit-event wiring** — same reasoning as Product: no
+HTTP-reachable action exists yet to audit.
+
+**Relationship to Product**: a Variant holds a required, **immutable**
+`productId` (never part of the update schema at all — not even nullable).
+Symmetrically with `product.model.ts` gaining no Category/Brand-array field,
+`product.model.ts` gains **no** `variantIds`/`hasVariants`/`defaultVariantId`
+field either — the child holds the pointer, not the parent (`product.model.ts`,
+`.repository.ts`, `.service.ts`, and `.schema.ts` are completely untouched by
+CAT-004). `assertValidProduct` in `product-variant.service.ts` mirrors
+`assertValidCategory`/`assertValidBrand` exactly: it re-fetches the target
+Product scoped by `organizationId` (a cross-organization `productId` is
+indistinguishable from nonexistent) and rejects if the Product is
+`ARCHIVED` — a Variant **cannot be newly created** under an archived
+Product. If a Product is archived _after_ Variants already reference it,
+those Variants are never cascaded, modified, or auto-archived — extending
+`ADR-011`/`ADR-020`'s no-cascade principle a third time (`ADR-021`).
+
+**Organization ownership**: same as Category/Brand/Product — every
+repository function requires `organizationId` as a mandatory parameter,
+denormalized directly onto the Variant document (not joined through
+Product).
+
+**SKU**: required, **organization-scoped** unique (`{organizationId, sku}`),
+normalized to **uppercase** (after trimming) before any duplicate check or
+persistence, so `"sku-1"` and `"SKU-1"` cannot coexist as distinct values.
+Editable via ordinary update (same freedom Category/Brand/Product's `slug`
+already has) — **no auto-generation**, since unlike `slug` there's no
+free-text `name` field to derive a SKU from; the caller always supplies it
+explicitly. Format is bounded to 1–64 characters, alphanumeric with optional
+internal hyphens/underscores. Duplicate handling reuses the exact
+established two-layer approach: a `existsWithSku` pre-check for a friendly
+error, backed by the database's unique index as the actual concurrency
+guarantee (`isDuplicateKeyError()`, reused unchanged from
+`lib/mongo-errors.ts`, converts a raw `11000` into the same typed
+`ValidationError` either path would produce) — proven by a dedicated
+concurrent-create race test identical in shape to Product's own.
+
+**Barcode**: optional, organization-scoped unique via a **partial** unique
+index (`{organizationId, barcode}`, `partialFilterExpression: {barcode:
+{$exists: true}}`) so any number of variants with no barcode can coexist —
+the same partial-index technique `organization-membership.model.ts` already
+uses for its own status-scoped uniqueness. A plain `sparse: true` was
+considered and rejected: on a **compound** index, `sparse` only excludes a
+document missing _every_ indexed field, and `organizationId` is always
+present, so it would never have excluded a barcode-less variant (confirmed
+by a failing test before this correction — two barcode-less variants
+collided on `barcode: null`). Only trimmed and length-bounded (1–64 chars) —
+**no digits-only
+enforcement and no checksum/symbology validation** (UPC/EAN-style
+verification is explicitly deferred to a future scanning/inventory task, by
+locked CAT-004 decision, not an oversight).
+
+**Pricing**: `price` (required), `compareAtPrice` and `cost` (both
+optional) are all integer minor units stored as `Number`, per the existing
+`ADR-008` and `db/README.md`'s "Money and dates" convention — not new
+architecture. Each is validated `finite()` + `int()` + `nonnegative()`,
+rejecting `NaN`, `Infinity`, `-Infinity`, negative values, and fractional
+values. **No relational constraint between `compareAtPrice` and `price`** is
+enforced yet (an inverted value is currently accepted) — that business rule
+is explicitly deferred to a future Commerce/Pricing task, by locked CAT-004
+decision. **No `currency` field** — this platform has no per-organization
+currency setting anywhere yet; adding one prematurely here would be a
+half-implemented feature. Revisit additively when multi-currency is a real
+requirement.
+
+**Attributes**: an array of `{ key: string, value: string | number | boolean }`
+pairs — deliberately **not** `Record<string, unknown>`. A dynamic-object-key
+shape risks prototype pollution (`{"__proto__": {...}}`) and can't be
+meaningfully typed per key; the array-of-pairs shape never uses a key's
+_content_ as an actual object property name anywhere in this codebase, which
+structurally rules out prototype pollution regardless of what string a
+caller sends. `__proto__`/`constructor`/`prototype` are also explicitly
+blocked as key _values_, as an additional belt-and-suspenders layer. Keys
+are restricted to letters/digits/space/hyphen/underscore (1–50 chars) —
+Mongo-special characters (`$`, `.`) are excluded by the same allowlist, on
+top of the platform-wide `sanitizeFilter: true` already active since DB-001.
+Values must be a plain string (max 200 chars), finite number, or boolean —
+`null`, arrays, and nested objects are all rejected. Duplicate keys
+(case-insensitive) are rejected. Capped at **30** items. On update, the
+array is replaced wholesale (matching how `media` already works on
+Product) — there is no per-key patch API. **No index** on attributes — no
+current query pattern (e.g. "filter by attribute") needs one, matching this
+project's established discipline of not adding a speculative index.
+
+**Lifecycle**: same `DRAFT | ACTIVE | ARCHIVED` convention (`ADR-011`),
+with the same unrestricted transition behavior Category/Brand/Product
+already have (including an `ARCHIVED → ACTIVE` "resurrection" via ordinary
+update) — kept consistent across all four catalog entities rather than
+introducing a stricter, Variant-only state machine.
+
+**No inventory fields**: `INV-001` is a separate, later task with its own
+full transaction-backed ledger (CLAUDE.md §6.3); no `stock`, `inventoryId`,
+or `trackInventory` placeholder field exists on Variant. When `INV-001`
+arrives, its own collection will reference `variantId` as the foreign key —
+the same directional pattern already used everywhere else in this codebase.
+
+**No variant-specific media**: Product's own `media` array (CAT-003) is the
+only image source for now; deferred, not silently decided as "never."
+
+**Indexes**:
+
+| Index                                 | Unique                          | Supports                                        |
+| ------------------------------------- | ------------------------------- | ----------------------------------------------- |
+| `{organizationId, sku}`               | yes                             | SKU uniqueness + lookup                         |
+| `{organizationId, barcode}`           | yes (partial: `barcode` exists) | Barcode uniqueness among variants that have one |
+| `{organizationId, productId, status}` | no                              | "Active variants of product X"                  |
+
 ## Testing
 
 `mongodb-memory-server`'s `MongoMemoryServer` (standalone) — no transactions
-are needed for category, brand, or product CRUD, so a replica set isn't
-required here.
+are needed for category, brand, product, or product-variant CRUD, so a
+replica set isn't required here.
