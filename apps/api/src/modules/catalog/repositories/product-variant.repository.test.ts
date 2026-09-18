@@ -308,6 +308,54 @@ test('two variants with no barcode can coexist (partial unique index)', async ()
   })
 })
 
+test('the same barcode is allowed across two different organizations', async () => {
+  const orgA = oid()
+  const orgB = oid()
+  const productId = oid()
+  await productVariantRepository.create({
+    organizationId: orgA,
+    productId,
+    sku: 'BC-ORG-A',
+    barcode: 'SHARED-BARCODE',
+    price: 100,
+    status: 'ACTIVE',
+  })
+  await assert.doesNotReject(() =>
+    productVariantRepository.create({
+      organizationId: orgB,
+      productId,
+      sku: 'BC-ORG-B',
+      barcode: 'SHARED-BARCODE',
+      price: 100,
+      status: 'ACTIVE',
+    }),
+  )
+})
+
+test('concurrent creates with the same barcode: exactly one succeeds, the database index rejects the other', async () => {
+  const organizationId = oid()
+  const productId = oid()
+  let counter = 0
+  const attempt = () => {
+    counter += 1
+    return productVariantRepository.create({
+      organizationId,
+      productId,
+      sku: `RACE-BC-SKU-${counter}`,
+      barcode: 'RACE-BARCODE',
+      price: 100,
+      status: 'ACTIVE',
+    })
+  }
+
+  const results = await Promise.allSettled([attempt(), attempt()])
+  const fulfilled = results.filter((r) => r.status === 'fulfilled')
+  const rejected = results.filter((r) => r.status === 'rejected')
+  assert.equal(fulfilled.length, 1)
+  assert.equal(rejected.length, 1)
+  assert.ok((rejected[0] as PromiseRejectedResult).reason instanceof ValidationError)
+})
+
 test('update cannot set organizationId or productId (not part of UpdateProductVariantData)', async () => {
   const organizationId = oid()
   const productId = oid()

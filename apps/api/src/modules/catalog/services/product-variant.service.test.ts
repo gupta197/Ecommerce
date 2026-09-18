@@ -527,6 +527,109 @@ test('attributes on update fully replace the existing array', async () => {
 })
 
 // ---------------------------------------------------------------------------
+// Security-focused: type confusion / Mongo operator injection / mass assignment
+// ---------------------------------------------------------------------------
+
+test('price, compareAtPrice, and cost reject non-numeric types (string, null, array, object)', async () => {
+  const organizationId = oid()
+  const product = await createRealProduct(organizationId)
+  for (const badValue of ['100', null, [100], { amount: 100 }]) {
+    await assert.rejects(
+      () =>
+        createVariant(organizationId, {
+          productId: product._id.toString(),
+          sku: `BAD-PRICE-TYPE-${Math.random()}`,
+          price: badValue,
+        }),
+      ZodError,
+    )
+  }
+  const variant = await createVariant(organizationId, {
+    productId: product._id.toString(),
+    sku: 'GOOD-PRICE-TYPE',
+    price: 100,
+  })
+  for (const badValue of ['100', null, [100], { amount: 100 }]) {
+    await assert.rejects(
+      () => updateVariant(organizationId, variant._id, { compareAtPrice: badValue }),
+      ZodError,
+    )
+    await assert.rejects(
+      () => updateVariant(organizationId, variant._id, { cost: badValue }),
+      ZodError,
+    )
+  }
+})
+
+test('Mongo-operator-shaped objects are rejected for sku, barcode, productId, and status (type confusion before any DB query)', async () => {
+  const organizationId = oid()
+  const product = await createRealProduct(organizationId)
+  const operatorPayload = { $gt: '' }
+
+  await assert.rejects(
+    () =>
+      createVariant(organizationId, {
+        productId: product._id.toString(),
+        sku: operatorPayload,
+        price: 100,
+      }),
+    ZodError,
+  )
+  await assert.rejects(
+    () =>
+      createVariant(organizationId, {
+        productId: product._id.toString(),
+        sku: 'OPERATOR-BARCODE',
+        barcode: operatorPayload,
+        price: 100,
+      }),
+    ZodError,
+  )
+  await assert.rejects(
+    () =>
+      createVariant(organizationId, {
+        productId: operatorPayload,
+        sku: 'OPERATOR-PRODUCT-ID',
+        price: 100,
+      }),
+    ZodError,
+  )
+  await assert.rejects(
+    () =>
+      createVariant(organizationId, {
+        productId: product._id.toString(),
+        sku: 'OPERATOR-STATUS',
+        price: 100,
+        status: operatorPayload,
+      }),
+    ZodError,
+  )
+})
+
+test('create rejects attempts to inject organizationId, _id, createdAt, and updatedAt (mass assignment)', async () => {
+  const organizationId = oid()
+  const product = await createRealProduct(organizationId)
+  const forbiddenFields = {
+    organizationId: oid().toString(),
+    _id: oid().toString(),
+    createdAt: new Date('2000-01-01'),
+    updatedAt: new Date('2000-01-01'),
+  }
+  for (const [field, value] of Object.entries(forbiddenFields)) {
+    await assert.rejects(
+      () =>
+        createVariant(organizationId, {
+          productId: product._id.toString(),
+          sku: `INJECT-${field}`,
+          price: 100,
+          [field]: value,
+        }),
+      ZodError,
+    )
+  }
+})
+
+// ---------------------------------------------------------------------------
 // Mass assignment / lifecycle / not-found
 // ---------------------------------------------------------------------------
 
