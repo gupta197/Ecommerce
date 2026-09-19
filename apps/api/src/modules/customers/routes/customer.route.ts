@@ -21,6 +21,7 @@ export interface CreateCustomersRouterOptions {
 export function createCustomersRouter(options: CreateCustomersRouterOptions): Router {
   const router = Router()
   const authenticate = createAuthenticateMiddleware(options.jwtSecret)
+  const { logger } = options
 
   router.use(authenticate)
 
@@ -60,6 +61,7 @@ export function createCustomersRouter(options: CreateCustomersRouterOptions): Ro
     }
     const customer = await customerService.archiveCustomerProfile(
       new Types.ObjectId(req.auth.userId),
+      logger,
     )
     sendSuccess(res, customer)
   })

@@ -196,21 +196,79 @@ test('archiveCustomerProfile/restoreCustomerProfile throw NotFoundError for a us
   await assert.rejects(() => restoreCustomerProfile(oid()), NotFoundError)
 })
 
-// NOTE: customer.archived/customer.restored are NOT wired into SEC-003's
-// AuditEvent in this implementation — adding them would require extending
-// AUDIT_ACTIONS/AUDIT_ENTITY_TYPES in modules/audit/models/audit-event.model.ts,
-// which conflicts with the explicit "Do NOT modify SEC-003" boundary for this
-// task. This is flagged in the implementation report as requiring your
-// decision, not silently resolved. This test documents the current state
-// (no audit event exists for any CUST-001 action) rather than leaving it
-// unverified.
-test('no AuditEvent is created for any customer profile lifecycle action (audit wiring not implemented — see report)', async () => {
+// ---------------------------------------------------------------------------
+// Audit (DEC-007): only customer.archived/customer.restored, never routine
+// profile CRUD, and never on a failed/rejected operation.
+// ---------------------------------------------------------------------------
+
+test('archiveCustomerProfile creates exactly one customer.archived AuditEvent with the correct actor/entity', async () => {
+  await AuditEventModel.deleteMany({})
+  const userId = oid()
+  const customer = await createCustomerProfile(userId, { firstName: 'Ada', lastName: 'Lovelace' })
+
+  const archived = await archiveCustomerProfile(userId)
+
+  const events = await AuditEventModel.find({ action: 'customer.archived' })
+  assert.equal(events.length, 1)
+  const event = events[0]
+  assert.equal(event?.actorUserId?.toString(), userId.toString())
+  assert.equal(event?.entityType, 'Customer')
+  assert.equal(event?.entityId?.toString(), customer._id.toString())
+  assert.equal(event?.entityId?.toString(), archived._id.toString())
+  assert.equal(event?.outcome, 'SUCCESS')
+  assert.equal(event?.severity, 'INFO')
+})
+
+test('restoreCustomerProfile creates exactly one customer.restored AuditEvent with the correct actor/entity', async () => {
+  await AuditEventModel.deleteMany({})
+  const userId = oid()
+  const customer = await createCustomerProfile(userId, { firstName: 'Ada', lastName: 'Lovelace' })
+  await archiveCustomerProfile(userId)
+  await AuditEventModel.deleteMany({}) // isolate: only interested in the restore event now
+
+  const restored = await restoreCustomerProfile(userId)
+
+  const events = await AuditEventModel.find({ action: 'customer.restored' })
+  assert.equal(events.length, 1)
+  const event = events[0]
+  assert.equal(event?.actorUserId?.toString(), userId.toString())
+  assert.equal(event?.entityType, 'Customer')
+  assert.equal(event?.entityId?.toString(), customer._id.toString())
+  assert.equal(event?.entityId?.toString(), restored._id.toString())
+  assert.equal(event?.outcome, 'SUCCESS')
+  assert.equal(event?.severity, 'INFO')
+})
+
+test('no AuditEvent is created for ordinary customer profile CRUD (create, read, update)', async () => {
   await AuditEventModel.deleteMany({})
   const userId = oid()
   await createCustomerProfile(userId, { firstName: 'Ada', lastName: 'Lovelace' })
+  await getCustomerProfile(userId)
   await updateCustomerProfile(userId, { firstName: 'Augusta' })
-  await archiveCustomerProfile(userId)
-  await restoreCustomerProfile(userId)
   const count = await AuditEventModel.countDocuments({})
   assert.equal(count, 0)
+})
+
+test('a failed archiveCustomerProfile/restoreCustomerProfile (no profile exists) creates no AuditEvent', async () => {
+  await AuditEventModel.deleteMany({})
+  const userId = oid()
+  await assert.rejects(() => archiveCustomerProfile(userId), NotFoundError)
+  await assert.rejects(() => restoreCustomerProfile(userId), NotFoundError)
+  const count = await AuditEventModel.countDocuments({})
+  assert.equal(count, 0)
+})
+
+test('archiving an already-archived profile still succeeds and still records exactly one more customer.archived event', async () => {
+  await AuditEventModel.deleteMany({})
+  const userId = oid()
+  await createCustomerProfile(userId, { firstName: 'Ada', lastName: 'Lovelace' })
+  await archiveCustomerProfile(userId)
+  await AuditEventModel.deleteMany({})
+
+  // archive() is idempotent at the repository level (a $set to the same
+  // value), so a second archive call still succeeds and still audits —
+  // this is not a "failed operation" the way a NotFoundError case is.
+  await archiveCustomerProfile(userId)
+  const count = await AuditEventModel.countDocuments({ action: 'customer.archived' })
+  assert.equal(count, 1)
 })

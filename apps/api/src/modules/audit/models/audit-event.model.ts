@@ -3,6 +3,11 @@ import mongoose, { Schema, type Types } from 'mongoose'
 // Locked action matrix (SEC-003 approved plan §3) — only actions that are
 // genuinely reachable in the current codebase. Do not add an action here
 // without also confirming (and documenting) that it can actually occur.
+//
+// customer.archived/customer.restored were added later (CUST-001, DEC-007)
+// as a small, additive extension — approved explicitly so this file could
+// remain untouched otherwise: no existing action, entity type, field, or
+// behavior in this module was changed to accommodate them.
 export const AUDIT_ACTIONS = [
   'auth.registration.success',
   'auth.registration.failure',
@@ -17,6 +22,8 @@ export const AUDIT_ACTIONS = [
   'membership.added',
   'membership.removed',
   'membership.role_changed',
+  'customer.archived',
+  'customer.restored',
 ] as const
 export type AuditAction = (typeof AUDIT_ACTIONS)[number]
 
@@ -25,6 +32,7 @@ export const AUDIT_ENTITY_TYPES = [
   'SecuritySession',
   'Organization',
   'OrganizationMembership',
+  'Customer',
 ] as const
 export type AuditEntityType = (typeof AUDIT_ENTITY_TYPES)[number]
 

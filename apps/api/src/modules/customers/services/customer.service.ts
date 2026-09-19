@@ -9,6 +9,12 @@ import {
   type UpdateCustomerInput,
 } from '../validation/customer.schema.js'
 import type { CustomerDocument } from '../models/customer.model.js'
+// Read-only use of SEC-003's already-public audit service — no
+// modification to audit.service.ts/audit-event.repository.ts. Only
+// customer.archived/customer.restored (DEC-007) are ever recorded from
+// this module; ordinary profile/address CRUD is deliberately not audited.
+import * as auditService from '../../audit/services/audit.service.js'
+import type { Logger } from '../../../lib/logger.js'
 
 function duplicateProfileError(): ValidationError {
   return new ValidationError('A customer profile already exists for this account.', [
@@ -83,8 +89,18 @@ export async function updateCustomerProfile(
 /** Soft-archives the caller's own profile. Never deletes, never cascades:
  *  existing addresses are untouched (see address.service.ts's
  *  assertCustomerActive, which blocks further address writes once
- *  archived, but never modifies existing address data). */
-export async function archiveCustomerProfile(userId: Types.ObjectId): Promise<CustomerDocument> {
+ *  archived, but never modifies existing address data).
+ *
+ *  Records a best-effort, non-blocking `customer.archived` AuditEvent
+ *  (DEC-007) only after the archive genuinely succeeds — a NotFoundError
+ *  is thrown, and no event is recorded, for a nonexistent/already-resolved
+ *  target. `logger` is optional (mirrors auth.service.ts's own pattern)
+ *  precisely so this remains a purely additive change: every pre-existing
+ *  caller/test that invokes this function without a logger is unaffected. */
+export async function archiveCustomerProfile(
+  userId: Types.ObjectId,
+  logger?: Logger,
+): Promise<CustomerDocument> {
   const existing = await customerRepository.findByUserId(userId)
   if (!existing) {
     throw new NotFoundError('Customer profile not found.')
@@ -93,10 +109,30 @@ export async function archiveCustomerProfile(userId: Types.ObjectId): Promise<Cu
   if (!archived) {
     throw new NotFoundError('Customer profile not found.')
   }
+
+  await auditService.record(
+    {
+      actorUserId: userId,
+      action: 'customer.archived',
+      entityType: 'Customer',
+      entityId: archived._id,
+      outcome: 'SUCCESS',
+      severity: 'INFO',
+    },
+    logger,
+  )
+
   return archived
 }
 
-export async function restoreCustomerProfile(userId: Types.ObjectId): Promise<CustomerDocument> {
+/** Restores a previously archived profile. Records a best-effort
+ *  `customer.restored` AuditEvent only after the restore genuinely
+ *  succeeds — see archiveCustomerProfile's doc comment for the same
+ *  reasoning on the optional `logger` parameter. */
+export async function restoreCustomerProfile(
+  userId: Types.ObjectId,
+  logger?: Logger,
+): Promise<CustomerDocument> {
   const existing = await customerRepository.findByUserId(userId)
   if (!existing) {
     throw new NotFoundError('Customer profile not found.')
@@ -105,5 +141,18 @@ export async function restoreCustomerProfile(userId: Types.ObjectId): Promise<Cu
   if (!restored) {
     throw new NotFoundError('Customer profile not found.')
   }
+
+  await auditService.record(
+    {
+      actorUserId: userId,
+      action: 'customer.restored',
+      entityType: 'Customer',
+      entityId: restored._id,
+      outcome: 'SUCCESS',
+      severity: 'INFO',
+    },
+    logger,
+  )
+
   return restored
 }
