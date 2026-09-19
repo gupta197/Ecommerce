@@ -5,6 +5,7 @@ import { createAuthRouter } from '../../modules/auth/routes/auth.route.js'
 import { createOrganizationsRouter } from '../../modules/organizations/routes/organization.route.js'
 import { createCustomersRouter } from '../../modules/customers/routes/customer.route.js'
 import { createWishlistRouter } from '../../modules/wishlist/routes/wishlist.route.js'
+import { createCartRouter } from '../../modules/cart/routes/cart.route.js'
 import type { AppConfig } from '../../config/env.js'
 import type { Logger } from '../../lib/logger.js'
 
@@ -41,6 +42,13 @@ export function createV1Router(config: AppConfig, logger: Logger): Router {
   // no-prefix mounting convention healthRouter/readyRouter already use.
   router.use(
     createWishlistRouter({
+      jwtSecret: config.auth.jwtSecret,
+      logger,
+    }),
+  )
+  router.use(
+    '/cart',
+    createCartRouter({
       jwtSecret: config.auth.jwtSecret,
       logger,
     }),
