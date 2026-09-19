@@ -11,6 +11,8 @@ import { ProductVariantModel } from '../../catalog/models/product-variant.model.
 import * as productRepository from '../../catalog/repositories/product.repository.js'
 import * as productVariantRepository from '../../catalog/repositories/product-variant.repository.js'
 import * as locationRepository from '../repositories/location.repository.js'
+import { archiveLocation } from './location.service.js'
+import { archiveVariant } from '../../catalog/services/product-variant.service.js'
 import {
   recordTransaction,
   recordTransfer,
@@ -211,6 +213,92 @@ test('recordTransaction: a malformed variantId/locationId is rejected before any
       }),
     ZodError,
   )
+})
+
+// ---------------------------------------------------------------------------
+// Lifecycle: archiving after inventory history already exists (no cascade)
+// ---------------------------------------------------------------------------
+
+test('archiving a Location after transactions exist preserves StockBalance/InventoryTransaction history, and blocks new transactions', async () => {
+  const organizationId = oid()
+  const variant = await createRealVariant(organizationId)
+  const location = await createRealLocation(organizationId)
+
+  await recordTransaction(organizationId, {
+    variantId: variant._id.toString(),
+    locationId: location._id.toString(),
+    type: 'PURCHASE',
+    quantity: 15,
+  })
+
+  await archiveLocation(organizationId, location._id)
+
+  // No cascade: existing balance and ledger history are untouched.
+  const balance = await getBalance(organizationId, location._id, variant._id)
+  assert.equal(balance?.quantityOnHand, 15)
+  const txCount = await InventoryTransactionModel.countDocuments({
+    organizationId,
+    locationId: location._id,
+  })
+  assert.equal(txCount, 1)
+
+  // Blocked going forward: a new transaction against the now-archived location is rejected.
+  await assert.rejects(
+    () =>
+      recordTransaction(organizationId, {
+        variantId: variant._id.toString(),
+        locationId: location._id.toString(),
+        type: 'PURCHASE',
+        quantity: 5,
+      }),
+    ValidationError,
+  )
+
+  // Rejection did not silently mutate the balance/ledger either.
+  const balanceAfterRejection = await getBalance(organizationId, location._id, variant._id)
+  assert.equal(balanceAfterRejection?.quantityOnHand, 15)
+  const txCountAfterRejection = await InventoryTransactionModel.countDocuments({
+    organizationId,
+    locationId: location._id,
+  })
+  assert.equal(txCountAfterRejection, 1)
+})
+
+test('archiving a Variant after transactions exist preserves StockBalance/InventoryTransaction history, and blocks new transactions', async () => {
+  const organizationId = oid()
+  const variant = await createRealVariant(organizationId)
+  const location = await createRealLocation(organizationId)
+
+  await recordTransaction(organizationId, {
+    variantId: variant._id.toString(),
+    locationId: location._id.toString(),
+    type: 'PURCHASE',
+    quantity: 25,
+  })
+
+  await archiveVariant(organizationId, variant._id)
+
+  const balance = await getBalance(organizationId, location._id, variant._id)
+  assert.equal(balance?.quantityOnHand, 25)
+  const txCount = await InventoryTransactionModel.countDocuments({
+    organizationId,
+    variantId: variant._id,
+  })
+  assert.equal(txCount, 1)
+
+  await assert.rejects(
+    () =>
+      recordTransaction(organizationId, {
+        variantId: variant._id.toString(),
+        locationId: location._id.toString(),
+        type: 'PURCHASE',
+        quantity: 5,
+      }),
+    ValidationError,
+  )
+
+  const balanceAfterRejection = await getBalance(organizationId, location._id, variant._id)
+  assert.equal(balanceAfterRejection?.quantityOnHand, 25)
 })
 
 // ---------------------------------------------------------------------------
