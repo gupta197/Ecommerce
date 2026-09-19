@@ -3,6 +3,7 @@ import { healthRouter } from './health.route.js'
 import { readyRouter } from './ready.route.js'
 import { createAuthRouter } from '../../modules/auth/routes/auth.route.js'
 import { createOrganizationsRouter } from '../../modules/organizations/routes/organization.route.js'
+import { createCustomersRouter } from '../../modules/customers/routes/customer.route.js'
 import type { AppConfig } from '../../config/env.js'
 import type { Logger } from '../../lib/logger.js'
 
@@ -23,6 +24,13 @@ export function createV1Router(config: AppConfig, logger: Logger): Router {
   router.use(
     '/organizations',
     createOrganizationsRouter({
+      jwtSecret: config.auth.jwtSecret,
+      logger,
+    }),
+  )
+  router.use(
+    '/customers',
+    createCustomersRouter({
       jwtSecret: config.auth.jwtSecret,
       logger,
     }),
