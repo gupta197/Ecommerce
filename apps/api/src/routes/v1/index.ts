@@ -6,6 +6,7 @@ import { createOrganizationsRouter } from '../../modules/organizations/routes/or
 import { createCustomersRouter } from '../../modules/customers/routes/customer.route.js'
 import { createWishlistRouter } from '../../modules/wishlist/routes/wishlist.route.js'
 import { createCartRouter } from '../../modules/cart/routes/cart.route.js'
+import { createCheckoutRouter } from '../../modules/checkout/routes/checkout.route.js'
 import type { AppConfig } from '../../config/env.js'
 import type { Logger } from '../../lib/logger.js'
 
@@ -49,6 +50,13 @@ export function createV1Router(config: AppConfig, logger: Logger): Router {
   router.use(
     '/cart',
     createCartRouter({
+      jwtSecret: config.auth.jwtSecret,
+      logger,
+    }),
+  )
+  router.use(
+    '/checkout',
+    createCheckoutRouter({
       jwtSecret: config.auth.jwtSecret,
       logger,
     }),
