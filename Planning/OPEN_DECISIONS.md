@@ -18,4 +18,9 @@ This file is the source of truth for architecture/business decisions that are no
 | DEC-004 | SMS/WhatsApp provider | Provider TBD | Select after notification requirements are finalized | OPEN |
 | DEC-005 | Production hosting | AWS / Azure / other | Decide after deployment requirements | OPEN |
 | DEC-006 | Migration tool for schema evolution | migrate-mongo / custom script + tracking collection / defer until first real schema | Defer the tool choice until the first schema-changing task (likely CAT-001) actually needs it | OPEN |
-| DEC-007 | CUST-001's approved `customer.archived`/`customer.restored` audit events vs. the explicit "do not modify SEC-003" boundary for that task | (a) Extend `AUDIT_ACTIONS`/`AUDIT_ENTITY_TYPES` in `modules/audit/models/audit-event.model.ts` with `customer.archived`/`customer.restored`/`Customer`, as a small, additive, isolated follow-up; (b) leave CUST-001 permanently without audit wiring for these actions | (a) — extending the enum is the same kind of additive change SEC-003's own design anticipates for future modules, and is lower-risk than leaving an explicitly-approved security-relevant audit requirement permanently unmet | OPEN |
+
+## Resolved Decisions
+
+| ID | Decision | Resolution | Recorded In |
+|---|---|---|---|
+| DEC-007 | CUST-001's approved `customer.archived`/`customer.restored` audit events vs. the explicit "do not modify SEC-003" boundary for that task | Resolved: option (a) — `AUDIT_ACTIONS`/`AUDIT_ENTITY_TYPES` in `modules/audit/models/audit-event.model.ts` extended with `customer.archived`/`customer.restored`/`Customer` (8-line additive change, no existing action/entity/behavior modified). `customer.service.ts`'s `archiveCustomerProfile`/`restoreCustomerProfile` now call the existing `audit.service.ts`'s `record()` after a successful archive/restore, with `actorUserId` from the authenticated `userId` and `entityId` the `Customer._id` — best-effort, non-blocking, same conventions as every other audited action. | `ADR-023` (addendum), `CHG-013` |
