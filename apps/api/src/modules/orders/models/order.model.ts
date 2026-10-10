@@ -1,12 +1,23 @@
 import mongoose, { Schema, type Types } from 'mongoose'
 
-// Only the initial state COM-003 ever sets. COM-004 ("Order lifecycle,
-// tracking, cancellation and returns") will extend this enum additively
-// (CONFIRMED, PROCESSING, PACKED, SHIPPED, DELIVERED, CANCELLED, etc. per
-// CLAUDE.md §7.3) when that task is approved — no future state is
-// pre-declared here, the same discipline already applied to Cart's own
-// deferred status field (ADR-025).
-export const ORDER_STATUSES = ['PENDING_PAYMENT'] as const
+// Extended additively by COM-004 (ADR-027) from COM-003's original
+// ['PENDING_PAYMENT']-only enum, per CLAUDE.md §7.3's own state-machine
+// description. Returns are deliberately NOT a value here — a separate
+// ReturnRequest collection (modules/returns/) owns the entire return
+// workflow; CANCELLED is the only non-fulfillment terminal state. This enum
+// only lists valid values — it does not itself encode which transitions
+// are legal; see order.service.ts's ORDER_TRANSITIONS for the enforced
+// edges (e.g. PROCESSING -> CANCELLED is deliberately NOT a legal edge in
+// this tranche, since no staff-cancellation caller exists yet).
+export const ORDER_STATUSES = [
+  'PENDING_PAYMENT',
+  'CONFIRMED',
+  'PROCESSING',
+  'PACKED',
+  'SHIPPED',
+  'DELIVERED',
+  'CANCELLED',
+] as const
 export type OrderStatus = (typeof ORDER_STATUSES)[number]
 
 export interface OrderItemAttrs {
@@ -50,6 +61,23 @@ export interface OrderAttrs {
   status: OrderStatus
   shippingAddress: OrderAddressSnapshot
   billingAddress: OrderAddressSnapshot
+  // --- COM-004 additive lifecycle/tracking fields (ADR-027) ---
+  // Cancellation. cancelledBy is deliberately NOT a separate field — "who"
+  // cancelled is already captured by the order.cancelled AuditEvent's own
+  // actorUserId, and duplicating it here would be a second, driftable place
+  // to track the same fact.
+  cancellationReason?: string
+  cancelledAt?: Date
+  // Tracking — plain opaque strings entered by a (future, not-yet-built)
+  // staff action, never resolved via any external carrier API, and never
+  // writable by any customer-facing route in this tranche.
+  carrier?: string
+  trackingNumber?: string
+  shippedAt?: Date
+  // Populated when transitioning to DELIVERED — the basis a future,
+  // explicitly-approved return-window policy would measure against
+  // (no window duration is enforced in this tranche; see returns/README.md).
+  deliveredAt?: Date
   createdAt: Date
   updatedAt: Date
 }
@@ -104,6 +132,12 @@ const orderSchema = new Schema<OrderAttrs>(
     status: { type: String, enum: ORDER_STATUSES, required: true, default: 'PENDING_PAYMENT' },
     shippingAddress: { type: orderAddressSchema, required: true },
     billingAddress: { type: orderAddressSchema, required: true },
+    cancellationReason: { type: String, trim: true, maxlength: 500 },
+    cancelledAt: { type: Date },
+    carrier: { type: String, trim: true, maxlength: 100 },
+    trackingNumber: { type: String, trim: true, maxlength: 100 },
+    shippedAt: { type: Date },
+    deliveredAt: { type: Date },
   },
   {
     collection: 'orders',
@@ -117,12 +151,14 @@ const orderSchema = new Schema<OrderAttrs>(
   },
 )
 
-// Deliberately NO secondary index in COM-003 — this collection is
-// write-only from this task's own perspective (no order-listing/lookup
-// route exists yet). Adding a {customerId}/{organizationId} index now,
-// before any query pattern needs it, would be building COM-004's own
-// infrastructure ahead of that task's approval. COM-004 will add whatever
-// indexes its actual read patterns require.
+// Added by COM-004 (ADR-027) now that real read patterns exist:
+// {customerId} backs "this customer's own order list" (GET /api/v1/orders),
+// sorted by recency; {organizationId, status} is forward-justified for a
+// future staff order-listing/queue view (not built in this tranche — no
+// route exposes it yet — but the exact, stated purpose of this task's own
+// "tracking" requirement, not a speculative addition).
+orderSchema.index({ customerId: 1, createdAt: -1 })
+orderSchema.index({ organizationId: 1, status: 1 })
 
 export type OrderDocument = mongoose.HydratedDocument<OrderAttrs>
 

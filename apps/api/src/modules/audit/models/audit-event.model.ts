@@ -8,6 +8,13 @@ import mongoose, { Schema, type Types } from 'mongoose'
 // as a small, additive extension — approved explicitly so this file could
 // remain untouched otherwise: no existing action, entity type, field, or
 // behavior in this module was changed to accommodate them.
+//
+// order.status_changed/order.cancelled/return.requested were added later
+// still (COM-004 Tranche A, approved) — the same additive-only pattern: no
+// existing action, entity type, field, or behavior changed. order.created
+// is deliberately NOT added — the Order document itself is the durable
+// business record (ADR-026/ADR-027), and CLAUDE.md's own audit-worthy
+// example list names order *cancellation*/refund, not plain placement.
 export const AUDIT_ACTIONS = [
   'auth.registration.success',
   'auth.registration.failure',
@@ -24,6 +31,9 @@ export const AUDIT_ACTIONS = [
   'membership.role_changed',
   'customer.archived',
   'customer.restored',
+  'order.status_changed',
+  'order.cancelled',
+  'return.requested',
 ] as const
 export type AuditAction = (typeof AUDIT_ACTIONS)[number]
 
@@ -33,6 +43,8 @@ export const AUDIT_ENTITY_TYPES = [
   'Organization',
   'OrganizationMembership',
   'Customer',
+  'Order',
+  'ReturnRequest',
 ] as const
 export type AuditEntityType = (typeof AUDIT_ENTITY_TYPES)[number]
 
