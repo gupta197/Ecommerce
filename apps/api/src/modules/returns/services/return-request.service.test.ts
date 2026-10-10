@@ -306,6 +306,109 @@ test('multiple items in one request are each validated against their own purchas
 })
 
 // ---------------------------------------------------------------------------
+// Security review finding F-1: duplicate variantId within one request must
+// not bypass the purchased-quantity / cumulative-quantity invariant.
+// ---------------------------------------------------------------------------
+
+test('rejects duplicate variantId entries within a single request, and creates no ReturnRequest', async () => {
+  const customer = await createRealCustomer()
+  const variantId = oid()
+  const order = await createRealOrder({ customerId: customer._id, variantId, quantity: 3 })
+
+  await assert.rejects(
+    () =>
+      requestReturn(customer._id, order._id, {
+        items: [
+          { variantId: variantId.toString(), quantity: 3 },
+          { variantId: variantId.toString(), quantity: 3 },
+        ],
+        reason: 'Duplicate variant probe',
+      }),
+    ZodError,
+  )
+  assert.equal(await ReturnRequestModel.countDocuments({ orderId: order._id }), 0)
+  assert.equal(await ReturnRequestLockModel.countDocuments({ orderId: order._id }), 0)
+})
+
+test('rejects duplicate variantId entries even when the combined (would-be) quantity equals the purchased quantity', async () => {
+  // Proves this is a flat "no duplicates" rule, not merely a quantity-sum
+  // check — two entries of 1+2=3 against a purchased quantity of 3 must
+  // still be rejected, since the correct, unambiguous request is a single
+  // entry of quantity 3.
+  const customer = await createRealCustomer()
+  const variantId = oid()
+  const order = await createRealOrder({ customerId: customer._id, variantId, quantity: 3 })
+
+  await assert.rejects(
+    () =>
+      requestReturn(customer._id, order._id, {
+        items: [
+          { variantId: variantId.toString(), quantity: 1 },
+          { variantId: variantId.toString(), quantity: 2 },
+        ],
+        reason: 'Duplicate variant probe',
+      }),
+    ZodError,
+  )
+  assert.equal(await ReturnRequestModel.countDocuments({ orderId: order._id }), 0)
+})
+
+test('a duplicate-variant payload is rejected even combined with a pre-existing non-rejected return request, and the existing total is unaffected', async () => {
+  const customer = await createRealCustomer()
+  const variantId = oid()
+  const order = await createRealOrder({ customerId: customer._id, variantId, quantity: 3 })
+
+  // A legitimate prior request already consumed 1 of the 3 purchased units.
+  await requestReturn(customer._id, order._id, returnInput(variantId, 1))
+
+  // A second, malformed (duplicate-variant) request attempting to claim the
+  // remaining 2 units twice over (1+1, or any duplicate shape) must be
+  // rejected outright by the schema, never reaching the cumulative check.
+  await assert.rejects(
+    () =>
+      requestReturn(customer._id, order._id, {
+        items: [
+          { variantId: variantId.toString(), quantity: 1 },
+          { variantId: variantId.toString(), quantity: 1 },
+        ],
+        reason: 'Duplicate variant probe',
+      }),
+    ZodError,
+  )
+
+  // Only the single legitimate prior request exists; its quantity is
+  // unchanged.
+  assert.equal(await ReturnRequestModel.countDocuments({ orderId: order._id }), 1)
+  const totalRequested = await ReturnRequestModel.aggregate([
+    { $match: { orderId: order._id } },
+    { $unwind: '$items' },
+    { $group: { _id: null, total: { $sum: '$items.quantity' } } },
+  ])
+  assert.equal(totalRequested[0]?.total, 1)
+})
+
+test('a request with distinct (non-duplicate) variantIds for the same underlying item across two legitimate, sequential requests still cannot exceed the purchased quantity', async () => {
+  // Confirms the fix did not weaken the pre-existing cross-request
+  // cumulative guarantee: this is the already-covered sequential case,
+  // re-asserted alongside the new duplicate-rejection tests for clarity.
+  const customer = await createRealCustomer()
+  const variantId = oid()
+  const order = await createRealOrder({ customerId: customer._id, variantId, quantity: 3 })
+
+  await requestReturn(customer._id, order._id, returnInput(variantId, 2))
+  await assert.rejects(
+    () => requestReturn(customer._id, order._id, returnInput(variantId, 2)),
+    ValidationError,
+  )
+  const totalRequested = await ReturnRequestModel.aggregate([
+    { $match: { orderId: order._id } },
+    { $unwind: '$items' },
+    { $group: { _id: null, total: { $sum: '$items.quantity' } } },
+  ])
+  assert.equal(totalRequested[0]?.total, 2)
+})
+
+// ---------------------------------------------------------------------------
 // CONCURRENCY — the central required guarantee
 // ---------------------------------------------------------------------------
 

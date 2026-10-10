@@ -16,6 +16,34 @@ const returnItemInputSchema = z
   })
   .strict()
 
+// Rejects a request naming the same variantId more than once — mirrors
+// product-variant.schema.ts's own productVariantAttributesSchema duplicate-
+// key convention exactly (a Set-based scan inside .refine()). Without this,
+// a single request could list one variantId twice (e.g. two entries each
+// within the purchased quantity individually, but exceeding it combined)
+// and defeat the purchased-quantity/cumulative-quantity checks below, which
+// — before this fix — validated each array entry independently rather than
+// their sum (COM-004 security review finding F-1). Case-insensitive since
+// ObjectId hex strings are case-insensitive.
+const uniqueVariantIdsSchema = z
+  .array(returnItemInputSchema)
+  .min(1)
+  .max(MAX_ITEMS_PER_REQUEST)
+  .refine(
+    (items) => {
+      const seen = new Set<string>()
+      for (const item of items) {
+        const key = item.variantId.toLowerCase()
+        if (seen.has(key)) {
+          return false
+        }
+        seen.add(key)
+      }
+      return true
+    },
+    { message: 'Duplicate variantId entries are not allowed in a single return request' },
+  )
+
 // orderId comes from the URL (:id), never the body. customerId/
 // organizationId/status/decidedAt/receivedAt/any Order snapshot field are
 // all deliberately absent — a return request can only ever name WHAT is
@@ -23,7 +51,7 @@ const returnItemInputSchema = z
 // is server-resolved from the authenticated customer and the Order itself.
 export const createReturnRequestSchema = z
   .object({
-    items: z.array(returnItemInputSchema).min(1).max(MAX_ITEMS_PER_REQUEST),
+    items: uniqueVariantIdsSchema,
     reason: z.string().trim().min(1).max(REASON_MAX_LENGTH),
   })
   .strict()

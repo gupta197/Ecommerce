@@ -27,26 +27,48 @@ function unknownOrderItemError(variantId: string): ValidationError {
 }
 
 /**
- * Validates each requested item's quantity against the Order's own
- * immutable snapshot quantity (a cheap, non-transactional check — the
- * snapshot never changes once the Order is created) and collects every
- * failing item rather than stopping at the first, mirroring
+ * Aggregates requested quantities by variantId — defense-in-depth (COM-004
+ * security review finding F-1). createReturnRequestSchema now rejects a
+ * repeated variantId at the request boundary, so in normal operation this
+ * map has exactly the same keys/values as a plain per-entry read of
+ * `items`. The quantity-integrity checks below are still written against
+ * this AGGREGATE rather than iterating `items` directly, so they remain
+ * mathematically correct — never silently bypassable by summing across
+ * repeated entries — even if that schema guarantee were ever weakened or
+ * bypassed by a future change; the service must not rely solely on schema
+ * validation for a financial/inventory-integrity invariant.
+ */
+function aggregateRequestedQuantities(
+  items: CreateReturnRequestInput['items'],
+): Map<string, number> {
+  const totals = new Map<string, number>()
+  for (const item of items) {
+    totals.set(item.variantId, (totals.get(item.variantId) ?? 0) + item.quantity)
+  }
+  return totals
+}
+
+/**
+ * Validates each requested variant's AGGREGATE quantity against the
+ * Order's own immutable snapshot quantity (a cheap, non-transactional
+ * check — the snapshot never changes once the Order is created) and
+ * collects every failing item rather than stopping at the first, mirroring
  * checkout.service.ts's priceCartItems all-or-nothing error-reporting style.
  */
 function validateAgainstOrderSnapshot(
-  parsed: CreateReturnRequestInput,
+  requestedByVariant: Map<string, number>,
   orderItemsByVariant: Map<string, number>,
 ): void {
   const issues: { path: string; message: string }[] = []
-  for (const item of parsed.items) {
-    const purchasedQuantity = orderItemsByVariant.get(item.variantId)
+  for (const [variantId, requestedQuantity] of requestedByVariant) {
+    const purchasedQuantity = orderItemsByVariant.get(variantId)
     if (purchasedQuantity === undefined) {
-      issues.push({ path: `items.${item.variantId}`, message: 'Item was not part of this order' })
+      issues.push({ path: `items.${variantId}`, message: 'Item was not part of this order' })
       continue
     }
-    if (item.quantity > purchasedQuantity) {
+    if (requestedQuantity > purchasedQuantity) {
       issues.push({
-        path: `items.${item.variantId}`,
+        path: `items.${variantId}`,
         message: 'Requested quantity exceeds the purchased quantity',
       })
     }
@@ -94,12 +116,13 @@ export async function requestReturn(
   const orderItemsByVariant = new Map(
     order.items.map((item) => [item.variantId.toString(), item.quantity]),
   )
-  for (const item of parsed.items) {
-    if (!orderItemsByVariant.has(item.variantId)) {
-      throw unknownOrderItemError(item.variantId)
+  const requestedByVariant = aggregateRequestedQuantities(parsed.items)
+  for (const variantId of requestedByVariant.keys()) {
+    if (!orderItemsByVariant.has(variantId)) {
+      throw unknownOrderItemError(variantId)
     }
   }
-  validateAgainstOrderSnapshot(parsed, orderItemsByVariant)
+  validateAgainstOrderSnapshot(requestedByVariant, orderItemsByVariant)
 
   const created = await withTransaction(async (session) => {
     await returnRequestLockRepository.touch(order._id, session)
@@ -110,12 +133,12 @@ export async function requestReturn(
     )
 
     const issues: { path: string; message: string }[] = []
-    for (const item of parsed.items) {
-      const purchasedQuantity = orderItemsByVariant.get(item.variantId) as number
-      const alreadyRequested = existingSums.get(item.variantId) ?? 0
-      if (alreadyRequested + item.quantity > purchasedQuantity) {
+    for (const [variantId, requestedQuantity] of requestedByVariant) {
+      const purchasedQuantity = orderItemsByVariant.get(variantId) as number
+      const alreadyRequested = existingSums.get(variantId) ?? 0
+      if (alreadyRequested + requestedQuantity > purchasedQuantity) {
         issues.push({
-          path: `items.${item.variantId}`,
+          path: `items.${variantId}`,
           message: 'Requested quantity exceeds the remaining returnable quantity for this item',
         })
       }
